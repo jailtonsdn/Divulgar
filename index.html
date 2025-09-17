@@ -8,97 +8,139 @@
   <style>
     :root{
       --bg:#0b1020; --card:#0f172a; --text:#e6eeff; --muted:#9fb0cf;
-      --border:#1e293b; --accent:#22c55e; --primary:#2563eb;
+      --border:#1e293b; --primary:#6ea8fe; --accent:#22c55e;
     }
     *{box-sizing:border-box}
-    body{margin:0; background:#0b1020; color:var(--text); font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
-    .wrap{max-width:980px; margin:28px auto 56px; padding:0 16px}
-    h1{margin:0 0 12px; font-size:24px}
-    .card{background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-      border:1px solid var(--border); border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.3)}
-    .row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
-    input, button, textarea{
-      border-radius:10px; border:1px solid var(--border); background:#0d1226; color:#fff; outline:none
+    html,body{height:100%}
+    body{
+      margin:0;
+      color:var(--text);
+      font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a2452 0%, #0b1020 48%, #0b1020 100%);
+      display:flex; align-items:flex-start; justify-content:center;
     }
-    input, textarea{padding:12px}
-    input{flex:1; min-width:240px}
-    textarea{width:100%; min-height:160px; resize:vertical}
-    .btn{padding:12px 14px; cursor:pointer}
-    .btn.primary{background:linear-gradient(180deg,#2563eb,#1d4ed8); border-color:#1d4ed8}
-    .btn.success{background:linear-gradient(180deg,#22c55e,#16a34a); border-color:#16a34a}
-    .btn.ghost{background:transparent}
-    .grid{display:grid; grid-template-columns: 170px 1fr; gap:16px; align-items:start}
-    @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
-    .media{background:#0d1326; border:1px solid var(--border); border-radius:12px; overflow:hidden; aspect-ratio:1/1; display:flex; align-items:center; justify-content:center}
-    .media img{width:100%; height:100%; object-fit:cover}
+    .wrap{width:100%; max-width:1000px; padding:28px 16px 64px}
+
+    .hero{
+      text-align:center; margin-bottom:18px;
+    }
+    .title{
+      font-size:28px; font-weight:800; margin:0 0 10px;
+      letter-spacing:.2px;
+    }
+    .subtitle{color:var(--muted); margin:0}
+    .bar{
+      margin:18px auto 0; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;
+      max-width:820px;
+    }
+    .input{
+      flex:1; min-width:260px; max-width:620px;
+      background:#0d1226; color:#fff; border:1px solid var(--border);
+      padding:14px 14px; border-radius:14px; outline:none;
+    }
+    .btn{
+      padding:14px 18px; border-radius:14px; border:1px solid #274269;
+      background:linear-gradient(180deg,#3b82f6,#1d4ed8); color:#fff; cursor:pointer;
+      transition:transform .08s ease, opacity .2s;
+    }
+    .btn:hover{transform:translateY(-1px)}
+
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid var(--border); border-radius:18px; padding:18px;
+      box-shadow:0 12px 40px rgba(0,0,0,.35);
+    }
+
+    /* layout editor */
+    .editor{
+      margin-top:18px;
+      display:grid; gap:18px; grid-template-columns: 320px 1fr; align-items:start;
+    }
+    @media (max-width:900px){
+      .editor{grid-template-columns:1fr}
+    }
+
+    /* media box: imagem centralizada e responsiva */
+    .media{
+      background:#0d1326; border:1px solid var(--border);
+      border-radius:16px; width:100%; aspect-ratio:1/1;
+      display:flex; align-items:center; justify-content:center; overflow:hidden;
+    }
+    .media img{
+      max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain;
+      display:block;
+    }
+
+    .row{display:flex; gap:10px; flex-wrap:wrap}
+    .field{
+      flex:1; min-width:220px; background:#0d1226; border:1px solid var(--border);
+      color:#fff; border-radius:12px; padding:12px 12px; outline:none
+    }
+    .wide{width:100%}
     .hint{color:var(--muted); font-size:13px}
+    .actions{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+    .btn.secondary{
+      background:linear-gradient(180deg,#22c55e,#16a34a); border-color:#138a3f;
+    }
+    .btn.ghost{background:transparent; border:1px dashed var(--border); color:#cbd5e1}
     .pill{border:1px solid var(--border); padding:6px 10px; border-radius:999px; font-size:13px; color:#c9d6f2}
-    .ok{color:#86efac} .x{color:#ef9a9a; text-decoration:line-through}
-    .preview{white-space:pre-wrap; background:#0b1224; border:1px dashed var(--border); border-radius:12px; padding:12px}
+    .preview{white-space:pre-wrap; background:#0b1224; border:1px dashed var(--border); border-radius:12px; padding:12px; margin-top:10px; color:#d9e6ff}
     .small{font-size:12px; color:var(--muted)}
-    .spacer{height:14px}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Gerador WhatsApp de Afiliados</h1>
-
-    <!-- Barra de entrada do link encurtado -->
-    <div class="card">
-      <div class="row">
-        <input id="url" placeholder="Cole aqui o link ENCURTADO do seu painel (amzn.to, mercadolivre.com/sec, shopee encurtado...)" />
-        <input id="ref" placeholder="Parâmetro extra (opcional, ex.: campanha=insta)" style="max-width:280px" />
-        <button id="parse" class="btn primary">Extrair dados</button>
+    <div class="hero">
+      <h1 class="title">Gerador WhatsApp de Afiliados</h1>
+      <p class="subtitle">Cole o <b>link encurtado</b> do seu painel (amzn.to, mercadolivre.com/sec, shopee encurtado…) e gere o texto pronto.</p>
+      <div class="bar">
+        <input id="url" class="input" placeholder="Cole aqui o link encurtado…" />
+        <button id="parse" class="btn">Extrair dados</button>
       </div>
-      <div class="hint">Dica: usamos a URL encurtada <b>como está</b> para compartilhar (preserva seu tracking). A expansão é só para coletar título/preço/imagem.</div>
+      <p class="hint" style="margin-top:10px">Usamos o link encurtado <b>do jeito que está</b> para compartilhar (preserva seu tracking). A expansão serve só para coletar título/preço/imagem.</p>
     </div>
 
-    <div class="spacer"></div>
+    <div class="card editor">
+      <!-- imagem centralizada -->
+      <div class="media"><img id="img" alt="Imagem do produto"></div>
 
-    <!-- Editor/preview -->
-    <div class="card">
-      <div class="grid">
-        <div class="media"><img id="img" alt="Imagem do produto"></div>
-        <div>
-          <div class="row">
-            <input id="store" placeholder="Loja (ex.: Mercado Livre)" style="max-width:220px" />
-            <input id="emoji" placeholder="Emoji (ex.: 🔥)" style="max-width:120px" />
-            <input id="badge" placeholder="Selo (ex.: Mercado livre)" style="max-width:220px" />
-          </div>
-
-          <input id="title" placeholder="Título do produto" />
-
-
-          <div class="row">
-            <input id="oldPrice" placeholder="Preço antigo (ex.: 569,00)" style="max-width:220px" />
-            <input id="price" placeholder="Preço atual (ex.: 549,00)" style="max-width:220px" />
-            <input id="installment" placeholder="Parcelas (ex.: 18x R$ 30,50 sem juros)" />
-          </div>
-
-          <div class="row">
-            <input id="image" placeholder="URL da imagem" />
-          </div>
-
-          <div class="row">
-            <input id="shareUrl" placeholder="Link para compartilhar (encurtado do seu painel)" />
-            <input id="finalUrl" placeholder="URL expandida (apenas referência)" />
-          </div>
-
-          <div class="row">
-            <button id="gen" class="btn success">Gerar texto e abrir WhatsApp</button>
-            <button id="copy" class="btn">Copiar texto</button>
-            <button id="previewBtn" class="btn ghost">Prévia</button>
-            <span id="hint" class="pill">pronto</span>
-          </div>
-
-          <div class="preview small" id="preview" style="display:none"></div>
+      <div>
+        <div class="row">
+          <input id="store" class="field" placeholder="Loja (ex.: Amazon)" style="max-width:250px" />
+          <input id="emoji" class="field" placeholder="Emoji (ex.: 🔥)" style="max-width:140px" />
+          <input id="badge" class="field" placeholder="Selo (ex.: Amazon)" style="max-width:250px" />
         </div>
+
+        <input id="title" class="field wide" placeholder="Título do produto" />
+
+        <div class="row">
+          <input id="oldPrice" class="field" placeholder="Preço antigo (ex.: 569,00)" style="max-width:260px" />
+          <input id="price" class="field" placeholder="Preço atual (ex.: 549,00)" style="max-width:260px" />
+          <input id="installment" class="field" placeholder="Parcelas (ex.: 6x R$ 43,71 sem juros)" />
+        </div>
+
+        <input id="image" class="field wide" placeholder="URL da imagem" />
+
+        <div class="row">
+          <input id="shareUrl" class="field" placeholder="Link para compartilhar (encurtado do seu painel)" />
+          <input id="finalUrl" class="field" placeholder="URL expandida (referência)" />
+        </div>
+
+        <div class="actions">
+          <button id="gen" class="btn secondary">Gerar texto e abrir WhatsApp</button>
+          <button id="copy" class="btn ghost">Copiar texto</button>
+          <button id="previewBtn" class="btn ghost">Prévia</button>
+          <span id="hint" class="pill">pronto</span>
+        </div>
+
+        <div class="preview small" id="preview" style="display:none"></div>
       </div>
     </div>
   </div>
 
   <script>
-    // ---------- helpers ----------
+    // ------- helpers -------
     const el = (id) => document.getElementById(id);
     const set = (id, v) => { el(id).value = v ?? ""; };
     const currency = (v) => {
@@ -107,29 +149,16 @@
       if (isNaN(n)) return String(v);
       return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
     };
-    const withExtraParam = (url, kvText) => {
-      // kvText pode ser "r=insta" ou "campanha=xyz". Se vier vazio, retorna url.
-      if (!url || !kvText) return url;
-      const [k, ...rest] = kvText.split("=");
-      const v = rest.join("=") || "";
-      try {
-        const u = new URL(url);
-        if (k) u.searchParams.set(k, v);
-        return u.toString();
-      } catch { return url; }
-    };
     const buildText = () => {
       const emoji = el("emoji").value || "🔥";
       const title = el("title").value || "";
-      const spec = el("spec").value || "";
       const oldPrice = el("oldPrice").value || "";
       const price = el("price").value || "";
       const installment = el("installment").value || "";
-      const share = withExtraParam(el("shareUrl").value || el("url").value || "", el("ref").value || "");
+      const share = el("shareUrl").value || el("url").value || "";
 
       const lines = [];
       lines.push(`${emoji} ${title}`);
-      if (spec) lines.push(spec);
       if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`);
       if (price)    lines.push(`✅ ${currency(price)}`);
       if (installment) lines.push(installment);
@@ -144,7 +173,7 @@
     };
     const setHint = (msg) => { el("hint").textContent = msg; };
 
-    // ---------- eventos ----------
+    // ------- eventos -------
     el("previewBtn").onclick = showPreview;
 
     el("copy").onclick = async () => {
@@ -167,19 +196,16 @@
         const res = await fetch(`/api/parse?url=${encodeURIComponent(url)}`);
         const data = await res.json();
 
-        // preenche campos
         set("store", data.store || "");
         set("badge", data.store || "");
         set("emoji", "🔥");
         set("title", data.title || "");
-        set("spec", "");
         set("oldPrice", data.oldPrice ?? "");
         set("price", data.price ?? "");
         set("installment", data.installment || "");
         set("image", data.image || "");
         set("shareUrl", data.shareUrl || url);
         set("finalUrl", data.finalUrl || "");
-
         if (data.image) el("img").src = data.image; else el("img").removeAttribute("src");
 
         setHint(data.parseHint ? `ok (${data.parseHint})` : "ok");
