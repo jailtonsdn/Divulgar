@@ -91,58 +91,78 @@ const parseMercadoLivre = (html) => {
 
 // Substitua sua parseAmazon por esta
 const parseAmazon = (html) => {
-  // ---- Título ----
+  // 1) Título
   const title =
     (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
     clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
 
-  // ---- Preço atual (várias tentativas) ----
-  const priceText =
-    // bloco novo "priceToPay"
-    html.match(/id=["']corePriceDisplay_[^"']+["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-    // deal price
-    html.match(/id=["']priceblock_dealprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-    // our price
-    html.match(/id=["']priceblock_ourprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-    // "a-offscreen" genérico (primeira ocorrência plausível)
-    html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
-    // blobs JSON (algumas páginas)
-    html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-    html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-    html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-    null;
-  const price = toNumber(priceText);
+  // 2) Tenta extrair do BLOCO OFICIAL DE PREÇO (desktop/mobile)
+  //    Esse bloco tem o "a-price-whole" e "a-price-fraction".
+  const priceBlock =
+    html.match(/id=["']corePriceDisplay_[^"']+["'][\s\S]{0,4000}?<\/div>/i)?.[0] ||
+    html.match(/id=["']apex_desktop["'][\s\S]{0,4000}?<\/div>/i)?.[0] ||
+    "";
 
-  // ---- Preço antigo (strike/basis/wasPrice) ----
-  const oldText =
-    // span riscado padrão
-    html.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-    // "De:" / "Preço de tabela"
-    html.match(/(?:De:|Preço\s+de\s+tabela)[^<]*?(R\$\s?[\d\.\,]+)/i)?.[1] ||
-    // ids legados
-    html.match(/id=["']priceblock_strikeprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-    // JSON internos
-    html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-    html.match(/"strikePrice"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-    null;
-  const oldPrice = toNumber(oldText);
+  let price = null, oldPrice = null;
 
-  // ---- Parcelamento (várias formas de texto) ----
-  let installment =
-    // “em até 10x de R$ 23,74 sem juros”
-    clean(html.match(/em\s+até\s+\d{1,2}x\s+de\s+R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "") ||
-    // “10x de R$ 23,74 sem juros”
-    clean(html.match(/\d{1,2}x\s+de\s+R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "") ||
-    // “parcelado em até 10x” etc.
-    clean(html.match(/parcelad[oa]\s+em\s+até\s+\d{1,2}x[^<]*R\$\s?[\d\.\,]+/i)?.[0] || "");
+  if (priceBlock) {
+    const whole = priceBlock.match(/class=["']a-price-whole["'][^>]*>([\d\.\,]+)/i)?.[1];
+    const frac  = priceBlock.match(/class=["']a-price-fraction["'][^>]*>(\d{1,2})/i)?.[1];
+    if (whole && frac) {
+      price = toNumber(`${whole},${frac}`);
+    } else {
+      // fallback dentro do bloco (algumas páginas ainda rendem a-offscreen)
+      const off = priceBlock.match(/a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1];
+      price = toNumber(off);
+    }
 
-  // ---- Imagem principal ----
+    // preço antigo (strike) dentro do mesmo bloco
+    const oldInBlock =
+      priceBlock.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      priceBlock.match(/id=["']priceblock_strikeprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      null;
+    oldPrice = toNumber(oldInBlock);
+  }
+
+  // 3) Fallbacks globais (caso o bloco oficial não exista nesta variação)
+  if (price == null) {
+    const priceText =
+      html.match(/id=["']priceblock_dealprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      html.match(/id=["']priceblock_ourprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
+      html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+      html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+      html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+      null;
+    price = toNumber(priceText);
+  }
+  if (oldPrice == null) {
+    const oldText =
+      html.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      html.match(/(?:De:|Preço\s+de\s+tabela)[^<]*?(R\$\s?[\d\.\,]+)/i)?.[1] ||
+      html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+      html.match(/"strikePrice"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+      null;
+    oldPrice = toNumber(oldText);
+  }
+
+  // 4) Parcelamento — pegue o MAIOR “Nx de R$ … (sem juros)”
+  //    (em algumas páginas aparecem várias opções; escolhemos a de maior N)
+  const allInstallments = Array.from(
+    html.matchAll(/(?:em\s+até\s+)?(\d{1,2})x[^<]{0,80}R\$\s?([\d\.\,]+)(?:\s+sem\s+juros)?/ig)
+  ).map(m => ({ n: parseInt(m[1], 10), val: m[2] }));
+  let installment = "";
+  if (allInstallments.length) {
+    const best = allInstallments.sort((a,b)=> b.n - a.n)[0];
+    installment = `${best.n}x de R$ ${best.val}${/sem\s+juros/i.test(html) ? " sem juros" : ""}`;
+  }
+
+  // 5) Imagem (OG / data-old-hires / data-a-dynamic-image / landingImage)
   let image =
     (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
     (html.match(/data-old-hires=["']([^"']+)["']/i)?.[1]) ||
     "";
   if (!image) {
-    // data-a-dynamic-image='{"https://...jpg":[500,500],"..."}'
     const dyn = html.match(/data-a-dynamic-image=['"]({[^'"]+})['"]/i)?.[1];
     if (dyn) {
       try {
@@ -153,12 +173,12 @@ const parseAmazon = (html) => {
     }
   }
   if (!image) {
-    // fallback na imagem do "landingImage"
     image = html.match(/id=["']landingImage["'][^>]+src=["']([^"']+)["']/i)?.[1] || "";
   }
 
-  return { title, price, oldPrice, installment, image, parseHint: "amazon_html_v2" };
+  return { title, price, oldPrice, installment, image, parseHint: "amazon_html_v3" };
 };
+
 
 
 const parseShopee = (html) => {
