@@ -1,0 +1,6 @@
+{
+  "regions": ["iad1"],
+  "functions": {
+    "api/parse.js": { "maxDuration": 10 }
+  }
+}
