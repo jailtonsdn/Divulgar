@@ -3,172 +3,104 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ofertas Afiliados</title>
-  <meta name="description" content="Página de ofertas com links de afiliados. Compartilhe no WhatsApp em 1 clique.">
-
-  <!-- Open Graph para ficar bonito ao compartilhar -->
-  <meta property="og:title" content="Ofertas Afiliados" />
-  <meta property="og:description" content="Seleção de ofertas atualizadas. Clique e compartilhe no WhatsApp!" />
-  <meta property="og:image" content="https://via.placeholder.com/1200x630.png?text=Ofertas+Afiliados" />
-  <meta property="og:type" content="website" />
-  <meta property="og:locale" content="pt_BR" />
-
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Ctext y='50%25' x='50%25' text-anchor='middle' dominant-baseline='central' font-size='180'%3E%F0%9F%94%A5%3C/text%3E%3C/svg%3E" />
-
+  <title>Gerador WhatsApp de Afiliados</title>
   <style>
     :root{
-      --bg:#0b1020; --card:#10172a; --muted:#8ca0c0; --text:#e6eeff;
-      --accent:#26c281; --accent-2:#3b82f6; --danger:#ef4444; --border:#1f2a44;
+      --bg:#0b1020; --card:#0f172a; --text:#e6eeff; --muted:#9fb0cf;
+      --border:#1e293b; --accent:#22c55e; --primary:#2563eb; --danger:#ef4444;
     }
     *{box-sizing:border-box}
-    body{
-      margin:0; background:radial-gradient(1200px 600px at 10% -10%, #1a2452 0%, #0b1020 48%, #0b1020 100%);
-      color:var(--text); font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial;
+    body{margin:0; background:#0b1020; color:var(--text); font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
+    .wrap{max-width:880px; margin:30px auto; padding:0 16px}
+    h1{margin:0 0 12px; font-size:22px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid var(--border); border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.3)}
+    .row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
+    input, button, textarea{
+      border-radius:10px; border:1px solid var(--border); background:#0d1226; color:#fff; outline:none
     }
-    header{
-      max-width:1100px; margin:32px auto 8px; padding:0 16px;
-      display:flex; align-items:center; justify-content:space-between; gap:16px;
-    }
-    .brand{
-      display:flex; align-items:center; gap:12px;
-    }
-    .brand .dot{width:12px; height:12px; border-radius:50%; background:linear-gradient(45deg,#22d3ee,#3b82f6);}
-    h1{margin:0; font-size:22px; letter-spacing:.3px}
-    .hint{color:var(--muted); font-size:14px}
-
-    .toolbar{display:flex; gap:8px; flex-wrap:wrap}
-    .input{
-      background:rgba(255,255,255,.06); border:1px solid var(--border); color:var(--text);
-      padding:10px 12px; border-radius:10px; outline:none; min-width:220px;
-    }
-    .btn{
-      background:linear-gradient(180deg,#334155,#1f2937); border:1px solid #2b3a55; color:#fff;
-      padding:10px 14px; border-radius:10px; cursor:pointer; transition:transform .08s ease, opacity .2s;
-    }
-    .btn:hover{transform:translateY(-1px)}
+    input, textarea{padding:12px}
+    input{flex:1; min-width:260px}
+    textarea{width:100%; min-height:160px; resize:vertical}
+    .btn{padding:12px 14px; cursor:pointer}
     .btn.primary{background:linear-gradient(180deg,#2563eb,#1d4ed8); border-color:#1d4ed8}
-    .btn.ghost{background:transparent; border:1px dashed var(--border); color:var(--muted)}
-    .btn.small{padding:8px 10px; font-size:14px}
-
-    main{max-width:1100px; margin:18px auto 60px; padding:0 16px}
-    .grid{
-      display:grid; gap:16px;
-      grid-template-columns:repeat(1, minmax(0,1fr));
-    }
-    @media (min-width:640px){ .grid{ grid-template-columns:repeat(2, minmax(0,1fr)); } }
-    @media (min-width:980px){ .grid{ grid-template-columns:repeat(3, minmax(0,1fr)); } }
-
-    .card{
-      background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-      border:1px solid var(--border); border-radius:18px; overflow:hidden; display:flex; flex-direction:column;
-      box-shadow: 0 10px 30px rgba(0,0,0,.25);
-    }
-    .media{
-      background:#0d1326; position:relative; aspect-ratio:1.3/1; overflow:hidden;
-      display:flex; align-items:center; justify-content:center;
-    }
-    .media img{width:100%; height:100%; object-fit:cover; display:block; transform:scale(1.02)}
-    .store{
-      position:absolute; top:10px; left:10px; background:#0f172a; color:#cbd5e1; border:1px solid var(--border);
-      padding:6px 10px; border-radius:999px; font-size:12px; letter-spacing:.3px; display:flex; align-items:center; gap:6px;
-    }
-    .store b{color:#fff}
-    .body{padding:14px 14px 12px}
-    .title{font-weight:700; font-size:16px; margin:0 0 8px}
-    .spec{color:#c1d0f0; font-size:13px; margin:0 0 10px}
-
-    .prices{display:grid; grid-template-columns:1fr; gap:4px; margin:10px 0 14px}
-    .price-row{display:flex; align-items:center; gap:8px; font-size:14px}
-    .x{color:#ef9a9a} .ok{color:#86efac}
-    .old{color:#ef9a9a; text-decoration:line-through; opacity:.8}
-    .now{color:#e6fffb; font-weight:800; font-size:18px}
-    .install{color:#cbd5e1; font-size:13px}
-
-    .actions{display:flex; gap:8px; margin-top:auto; padding:0 14px 14px}
-    .actions .btn{flex:1}
-    .actions .btn.wa{background:linear-gradient(180deg,#22c55e,#16a34a); border-color:#16a34a}
-    .actions .btn.link{background:linear-gradient(180deg,#3b82f6,#1d4ed8); border-color:#1d4ed8}
-    .meta{padding:0 14px 14px; color:var(--muted); font-size:12px}
-    .empty{color:var(--muted); text-align:center; padding:40px 0}
-    .badge{font-size:12px; background:rgba(255,255,255,.06); border:1px solid var(--border); padding:4px 8px; border-radius:999px}
+    .btn.success{background:linear-gradient(180deg,#22c55e,#16a34a); border-color:#16a34a}
+    .btn.ghost{background:transparent}
+    .grid{display:grid; grid-template-columns: 160px 1fr; gap:16px; align-items:start}
+    .media{background:#0d1326; border:1px solid var(--border); border-radius:12px; overflow:hidden; aspect-ratio:1/1}
+    .media img{width:100%; height:100%; object-fit:cover}
+    .hint{color:var(--muted); font-size:13px}
+    .prices{display:flex; gap:14px; flex-wrap:wrap}
+    .pill{border:1px solid var(--border); padding:6px 10px; border-radius:999px; font-size:13px; color:#c9d6f2}
+    .ok{color:#86efac} .x{color:#ef9a9a; text-decoration:line-through}
+    .preview{white-space:pre-wrap; background:#0b1224; border:1px dashed var(--border); border-radius:12px; padding:12px}
+    .small{font-size:12px; color:var(--muted)}
   </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <span class="dot"></span>
-      <div>
-        <h1>Ofertas Afiliados</h1>
-        <div class="hint">Clique para abrir a oferta ou gerar texto de WhatsApp.</div>
+  <div class="wrap">
+    <h1>Gerador WhatsApp de Afiliados</h1>
+    <div class="card">
+      <div class="row">
+        <input id="url" placeholder="Cole aqui o link do produto (Mercado Livre, Amazon, Shopee, Magalu…)" />
+        <input id="ref" placeholder="Parâmetro de campanha (opcional, ex.: insta)" style="max-width:220px" />
+        <button id="parse" class="btn primary">Extrair dados</button>
+      </div>
+      <div class="hint">Dica: a função serverless busca a página e tenta extrair título/preço/parcelas/imagem. Edite abaixo se precisar.</div>
+    </div>
+
+    <div style="height:14px"></div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="media"><img id="img" alt="Imagem do produto"></div>
+        <div>
+          <div class="row">
+            <input id="store" placeholder="Loja (ex.: Mercado Livre)" style="max-width:220px" />
+            <input id="emoji" placeholder="Emoji (ex.: 🔥)" style="max-width:120px" />
+            <input id="badge" placeholder="Selo (ex.: Mercado livre)" style="max-width:220px" />
+          </div>
+
+          <input id="title" placeholder="Título do produto" />
+
+          <div class="row">
+            <input id="spec" placeholder="Especificações / complemento (opcional)" />
+          </div>
+
+          <div class="row prices">
+            <input id="oldPrice" placeholder="Preço antigo (ex.: 569,00)" style="max-width:200px" />
+            <input id="price" placeholder="Preço atual (ex.: 549,00)" style="max-width:200px" />
+            <input id="installment" placeholder="Parcelas (ex.: 18x R$ 30,50 sem juros)" style="min-width:260px" />
+          </div>
+
+          <div class="row">
+            <input id="image" placeholder="URL da imagem" />
+          </div>
+
+          <div class="row">
+            <input id="outUrl" placeholder="URL final (com seu link de afiliado)" />
+          </div>
+
+          <div class="row">
+            <button id="gen" class="btn success">Gerar texto e abrir WhatsApp</button>
+            <button id="copy" class="btn">Copiar texto</button>
+            <button id="previewBtn" class="btn ghost">Prévia</button>
+          </div>
+
+          <div class="preview small" id="preview" style="display:none"></div>
+        </div>
       </div>
     </div>
-    <div class="toolbar">
-      <input id="filter" class="input" placeholder="Filtrar por loja ou título…" />
-      <button id="clear" class="btn ghost small">Limpar</button>
-    </div>
-  </header>
-
-  <main>
-    <div id="grid" class="grid"></div>
-    <div id="empty" class="empty" style="display:none;">Nenhum item encontrado.</div>
-  </main>
+  </div>
 
   <script>
-    // =========================
-    // CONFIGURE SUAS OFERTAS AQUI
-    // =========================
-    const OFFERS = [
-      {
-        store: "Mercado Livre",
-        badge: "Mercado livre",              // texto do selo
-        emoji: "🔥",
-        title: "Fritadeira Air Fryer Forno Oven 12L, Mondial, 2000w - Afon-12l-bi",
-        spec: "",                            // opcional
-        image: "https://http2.mlstatic.com/D_NQ_NP_2X_864709-MLA49463651630_032022-F.webp",
-        // preços (como número ou string). Se não tiver antigo, deixe null
-        oldPrice: 569.00,
-        price: 549.00,
-        installment: "18x R$ 30,50 sem juros",
-        url: "https://mercadolivre.com/sec/2NJaFkK"
-      },
-      // Exemplos de outras lojas:
-      {
-        store: "Amazon",
-        badge: "Amazon",
-        emoji: "⚡",
-        title: "Echo Dot 5ª Geração com Alexa",
-        spec: "Som de qualidade, relógio LED",
-        image: "https://m.media-amazon.com/images/I/61HEw8M7t6L._AC_SL1500_.jpg",
-        oldPrice: 349.00,
-        price: 279.00,
-        installment: "10x R$ 27,90 sem juros",
-        url: "https://www.amazon.com.br/dp/B09B8V1L1J"
-      },
-      {
-        store: "Shopee",
-        badge: "Shopee",
-        emoji: "🔥",
-        title: "Headset Gamer RGB 7.1",
-        spec: "Cancelamento de ruído",
-        image: "https://via.placeholder.com/800x600.png?text=Headset+Gamer",
-        oldPrice: null,
-        price: 99.90,
-        installment: "Até 6x sem juros",
-        url: "https://shopee.com.br/"
-      }
-    ];
-
-    // =========================
-    // UTILITÁRIOS
-    // =========================
+    const el = (id) => document.getElementById(id);
     const currency = (v) => {
-      if (v === null || v === undefined || v === "") return "";
-      const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
-      if (isNaN(n)) return String(v);
-      return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      if (!v) return "";
+      const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^\d,.-]/g, "").replace(",", "."));
+      if (isNaN(n)) return v;
+      return n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
     };
-
-    // Anexa sufixo ?r=xyz ou &r=xyz nos links (campanhas)
     const withRef = (url, ref) => {
       if (!ref) return url;
       try{
@@ -176,111 +108,77 @@
         if (u.search) u.search += `&r=${encodeURIComponent(ref)}`;
         else u.search = `?r=${encodeURIComponent(ref)}`;
         return u.toString();
-      }catch{
-        // fallback bruto
-        return url + (url.includes("?") ? "&" : "?") + `r=${encodeURIComponent(ref)}`;
-      }
+      }catch{ return url; }
+    };
+    const buildText = () => {
+      const emoji = el("emoji").value || "🔥";
+      const title = el("title").value || "";
+      const spec = el("spec").value || "";
+      const oldPrice = el("oldPrice").value || "";
+      const price = el("price").value || "";
+      const installment = el("installment").value || "";
+      const link = withRef(el("outUrl").value || el("url").value || "", el("ref").value || "");
+
+      const lines = [];
+      lines.push(`${emoji} ${title}`);
+      if (spec) lines.push(spec);
+      if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`);
+      if (price) lines.push(`✅ ${currency(price)}`);
+      if (installment) lines.push(installment);
+      lines.push("");
+      if (link) lines.push(link);
+      return lines.join("\n");
     };
 
-    // Gera o texto padrão de WhatsApp no formato do print
-    function buildWhatsappText(o){
-      const linhas = [];
-      linhas.push(`${o.emoji || "🔥"} ${o.title}`);
-      if (o.spec) linhas.push(o.spec);
+    const showPreview = () => {
+      const p = el("preview");
+      p.textContent = buildText();
+      p.style.display = "block";
+    };
 
-      if (o.oldPrice) linhas.push(`❌ ${currency(o.oldPrice)}`);
-      if (o.price)    linhas.push(`✅ ${currency(o.price)}`);
-      if (o.installment) linhas.push(o.installment);
+    el("previewBtn").onclick = showPreview;
 
-      linhas.push("");
-      linhas.push(withRef(o.url, refParam));
-      return linhas.join("\n");
-    }
+    el("copy").onclick = async () => {
+      const txt = buildText();
+      try { await navigator.clipboard.writeText(txt); } catch {}
+      showPreview();
+      alert("Texto copiado!");
+    };
 
-    // Copia para área de transferência e (em mobile) tenta abrir WhatsApp
-    function shareWhatsApp(o){
-      const msg = buildWhatsappText(o);
-      // Copiar
-      navigator.clipboard?.writeText(msg).catch(()=>{});
-      // Tentar abrir WhatsApp com o texto
-      const wa = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    el("gen").onclick = () => {
+      const txt = buildText();
+      // copia
+      navigator.clipboard?.writeText(txt).catch(()=>{});
+      // abre WhatsApp
+      const wa = `https://wa.me/?text=${encodeURIComponent(txt)}`;
       window.open(wa, "_blank", "noopener");
-    }
+    };
 
-    // =========================
-    // RENDERIZAÇÃO
-    // =========================
-    const grid = document.getElementById("grid");
-    const empty = document.getElementById("empty");
-    const refParam = new URLSearchParams(location.search).get("r") || "";
+    el("parse").onclick = async () => {
+      const url = el("url").value.trim();
+      if (!url) { alert("Cole o link do produto."); return; }
+      try{
+        const res = await fetch(`/api/parse?url=${encodeURIComponent(url)}`);
+        if (!res.ok) throw new Error(`Falha ao ler a página (${res.status})`);
+        const data = await res.json();
 
-    function render(list){
-      grid.innerHTML = "";
-      if (!list.length){
-        empty.style.display = "block";
-        return;
+        el("store").value = data.store || "";
+        el("badge").value = data.store || "";
+        el("emoji").value = "🔥";
+        el("title").value = data.title || "";
+        el("spec").value = "";
+        el("oldPrice").value = data.oldPrice ? data.oldPrice : "";
+        el("price").value = data.price ? data.price : "";
+        el("installment").value = data.installment || "";
+        el("image").value = data.image || "";
+        el("outUrl").value = data.url || url;
+        if (data.image) el("img").src = data.image;
+
+        showPreview();
+      }catch(e){
+        alert("Não consegui extrair automaticamente. Você pode preencher os campos manualmente.\n\n" + e.message);
       }
-      empty.style.display = "none";
-
-      list.forEach(o=>{
-        const card = document.createElement("article");
-        card.className = "card";
-        card.innerHTML = `
-          <div class="media">
-            <img src="${o.image}" alt="${o.title}">
-            <div class="store"><span class="badge">${o.badge || o.store}</span></div>
-          </div>
-          <div class="body">
-            <h2 class="title">${(o.emoji || "🔥")} ${o.title}</h2>
-            ${o.spec ? `<p class="spec">${o.spec}</p>` : ``}
-
-            <div class="prices">
-              ${o.oldPrice ? `
-                <div class="price-row x">❌ <span class="old">${currency(o.oldPrice)}</span></div>
-              ` : ``}
-              ${o.price ? `
-                <div class="price-row ok">✅ <span class="now">${currency(o.price)}</span></div>
-              ` : ``}
-              ${o.installment ? `
-                <div class="price-row install">${o.installment}</div>
-              ` : ``}
-            </div>
-          </div>
-
-          <div class="actions">
-            <button class="btn wa" title="Copiar texto e abrir WhatsApp">Compartilhar WhatsApp</button>
-            <a class="btn link" href="${withRef(o.url, refParam)}" target="_blank" rel="noopener">Abrir oferta</a>
-          </div>
-          <div class="meta">Loja: <b>${o.store}</b></div>
-        `;
-
-        card.querySelector(".wa").addEventListener("click", ()=> shareWhatsApp(o));
-        grid.appendChild(card);
-      });
-    }
-
-    // =========================
-    // FILTRO
-    // =========================
-    const filter = document.getElementById("filter");
-    const clearBtn = document.getElementById("clear");
-
-    function applyFilter(){
-      const q = filter.value.trim().toLowerCase();
-      const result = OFFERS.filter(o=>{
-        const hay = [
-          o.store, o.badge, o.title, o.spec
-        ].filter(Boolean).join(" ").toLowerCase();
-        return hay.includes(q);
-      });
-      render(result);
-    }
-
-    filter.addEventListener("input", applyFilter);
-    clearBtn.addEventListener("click", ()=>{ filter.value=""; applyFilter(); });
-
-    // Inicial
-    render(OFFERS);
+    };
   </script>
 </body>
 </html>
