@@ -1,7 +1,8 @@
 // api/parse.js
 // Gerador de conteúdo para WhatsApp a partir de link encurtado de AFILIADOS.
 // - Segue redirecionamentos (amzn.to, /sec/, etc.) e usa a URL expandida para parse.
-// - NÃO usa API oficial das lojas. É "best-effort" (pode falhar em casos com captcha/robot).
+// - Segue também o <link rel="canonical"> quando a página final for uma “landing” (ex.: /social/ do ML).
+// - NÃO usa API oficial das lojas. Best-effort (pode falhar em casos com captcha/robot).
 // - Retorna: { store, title, price, oldPrice, installment, image, shareUrl, finalUrl, parseHint }
 
 export const config = { runtime: "nodejs" };
@@ -19,7 +20,10 @@ const toNumber = (s) => {
 
 const tryOG = (html) => {
   const get = (prop) => {
-    const re = new RegExp(`<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']+)["']`, "i");
+    const re = new RegExp(
+      `<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']+)["']`,
+      "i"
+    );
     return html.match(re)?.[1] || "";
   };
   return { title: clean(get("og:title")), image: get("og:image") };
@@ -28,18 +32,21 @@ const tryOG = (html) => {
 const guessStore = (u) => {
   try {
     const h = new URL(u).hostname.toLowerCase();
-    if (h.includes("mercadolivre") || h.includes("mercadolibre") || h.includes("mlstatic")) return "Mercado Livre";
+    if (h.includes("mercadolivre") || h.includes("mercadolibre") || h.includes("mlstatic"))
+      return "Mercado Livre";
     if (h.includes("amazon")) return "Amazon";
     if (h.includes("shopee")) return "Shopee";
     if (h.includes("magalu") || h.includes("magazineluiza")) return "Magalu";
     if (h.includes("kabum")) return "KaBuM!";
     return h.replace(/^www\./, "");
-  } catch { return "Loja"; }
+  } catch {
+    return "Loja";
+  }
 };
 
 /**
  * Faz o fetch da página seguindo redirecionamentos.
- * Retorna { html, finalUrl } — importantíssimo usar finalUrl para decidir o parser.
+ * Retorna { html, finalUrl } — use SEMPRE finalUrl para decidir o parser.
  */
 const fetchPageFollow = async (url) => {
   const res = await fetch(url, {
@@ -47,7 +54,8 @@ const fetchPageFollow = async (url) => {
     headers: {
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
       "upgrade-insecure-requests": "1",
       "cache-control": "no-cache",
@@ -61,141 +69,182 @@ const fetchPageFollow = async (url) => {
   return { html, finalUrl: res.url || url };
 };
 
-/* ---------------- Parsers por loja (best-effort) ---------------- */
-// ---- SUBSTITUA a sua parseMercadoLivre por esta v3 ----
+/* ---------------- Parsers por loja ---------------- */
+
+/**
+ * Mercado Livre v4
+ * - Se a página final for uma “social/landing”, o handler acima vai seguir o canonical antes de chegar aqui.
+ * - Extrai preço atual/antigo do bloco `andes-money-amount` e parcelas do texto/JSON.
+ */
 const parseMercadoLivre = (html) => {
   const og = tryOG(html);
 
-  // 1) Título (OG + H1)
+  // Título
   const title =
     og.title ||
     clean(
       html
-        .match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]
+        .match(
+          /<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i
+        )?.[1]
         ?.replace(/<[^>]+>/g, "") || ""
     );
 
-  // helpers
-  const findNum = (re) => {
-    const m = html.match(re);
-    return m ? toNumber(m[1]) : null;
-  };
+  // 1) preço atual (fraction + cents) no segundo bloco
+  const secondLine =
+    html.match(/ui-pdp-price__second-line[\s\S]{0,1500}?<\/div>/i)?.[0] ||
+    html;
+  const currentBlock = secondLine.replace(
+    /andes-money-amount--previous[\s\S]*?<\/span>/gi,
+    ""
+  );
+  const pWhole =
+    currentBlock.match(
+      /andes-money-amount__fraction[^>]*>([\d\.]+)/i
+    )?.[1] || null;
+  const pCents =
+    currentBlock.match(
+      /andes-money-amount__cents[^>]*>(\d{1,2})/i
+    )?.[1] || "00";
+  let price = pWhole ? toNumber(`${pWhole},${pCents}`) : null;
 
-  // 2) Tenta JSON-LD Product (muito comum no ML)
-  let price = null, oldPrice = null, installment = "";
+  // 2) preço antigo (previous)
+  const prevBlock =
+    secondLine.match(
+      /andes-money-amount--previous[\s\S]{0,500}?<\/span>/i
+    )?.[0] || "";
+  const oWhole =
+    prevBlock.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1] ||
+    null;
+  const oCents =
+    prevBlock.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] ||
+    "00";
+  let oldPrice = oWhole ? toNumber(`${oWhole},${oCents}`) : null;
 
-  try {
-    const ldScripts = [...html.matchAll(
-      /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-    )].map(m => m[1]);
-    for (const raw of ldScripts) {
-      try {
-        const j = JSON.parse(raw.trim());
-        const arr = Array.isArray(j) ? j : [j];
-        for (const node of arr) {
-          if ((node?.["@type"] || "").toString().toLowerCase().includes("product")) {
-            if (!price) price = toNumber(node?.offers?.price || node?.offers?.priceSpecification?.price);
-            if (!oldPrice && node?.offers?.highPrice && node?.offers?.lowPrice) {
-              const hi = toNumber(node.offers.highPrice);
-              const lo = toNumber(node.offers.lowPrice);
-              if (hi && lo && hi !== lo) { oldPrice = hi; price = lo ?? price; }
-            }
-          }
-        }
-      } catch {}
-    }
-  } catch {}
+  // 3) fallbacks: itemprop/JSON prices
+  if (price == null) {
+    price =
+      toNumber(
+        html.match(
+          /itemprop=["']price["'][^>]*content=["']([^"']+)["']/i
+        )?.[1]
+      ) ||
+      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) ||
+      null;
+  }
+  if (oldPrice == null) {
+    oldPrice =
+      toNumber(
+        html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]
+      ) ||
+      toNumber(
+        html.match(/"original_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]
+      ) ||
+      null;
 
-  // 3) Caça JSON interno do ML (prices/installments)
-  if (price == null || oldPrice == null || !installment) {
-    // bloco "prices":{"prices":[{... "amount": 1234.56, "regular_amount": 1569.00 }]}
-    const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,6000}?}/i)?.[0] || "";
-    if (pricesBlock) {
-      const amounts = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(x => toNumber(x[1]));
-      const regular = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)].map(x => toNumber(x[1]));
-      // Pega o menor "amount" como preço atual e o maior "regular_amount" como preço antigo
-      if (amounts.length && price == null) price = amounts.filter(Boolean).sort((a,b)=>a-b)[0] || null;
-      if (regular.length && oldPrice == null) oldPrice = regular.filter(Boolean).sort((a,b)=>b-a)[0] || null;
-    }
-
-    // installments: {"installments":{"quantity":6,"amount":43.71,"rate":0}}
-    const instBlock = html.match(/"installments"\s*:\s*{[\s\S]{0,400}?}/i)?.[0] || "";
-    if (instBlock) {
-      const q = findNum(/"quantity"\s*:\s*(\d{1,2})/i);
-      const a = findNum(/"amount"\s*:\s*([\d\.,]+)/i);
-      const r = findNum(/"rate"\s*:\s*([\d\.,]+)/i);
-      if (q && a) {
-        installment = `${q}x de ${a.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}${(r === 0 || r === null) ? " sem juros" : ""}`;
+    if (oldPrice == null) {
+      const pricesBlock =
+        html.match(/"prices"\s*:\s*{[\s\S]{0,6000}?}/i)?.[0] || "";
+      const regular = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)].map(
+        (x) => toNumber(x[1])
+      );
+      if (regular.length)
+        oldPrice = regular.filter(Boolean).sort((a, b) => b - a)[0];
+      if (price == null) {
+        const amounts = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(
+          (x) => toNumber(x[1])
+        );
+        if (amounts.length)
+          price = amounts.filter(Boolean).sort((a, b) => a - b)[0];
       }
     }
   }
 
-  // 4) Fallbacks simples (meta itemprop / campos soltos)
-  if (price == null) {
-    price = findNum(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i) ||
-            findNum(/"price"\s*:\s*("?[\d\.,]+"?)/i);
-  }
-  if (oldPrice == null) {
-    oldPrice = findNum(/"list_price"\s*:\s*("?[\d\.,]+"?)/i) ||
-               findNum(/"original_price"\s*:\s*("?[\d\.,]+"?)/i);
-  }
+  // 4) parcelas (texto ou JSON installments)
+  let installment =
+    clean(
+      html.match(
+        /em\s+até\s+\d{1,2}x[^<]{0,80}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i
+      )?.[0] || ""
+    ) || "";
   if (!installment) {
-    const instTxt = clean(html.match(/em\s+até\s+\d{1,2}x[^<]{0,80}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "");
-    if (instTxt) installment = instTxt;
+    const instBlock =
+      html.match(/"installments"\s*:\s*{[\s\S]{0,400}?}/i)?.[0] || "";
+    const q = parseInt(instBlock.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
+    const a = toNumber(instBlock.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
+    const r = toNumber(instBlock.match(/"rate"\s*:\s*([\d\.,]+)/i)?.[1] || "");
+    if (q && a) {
+      installment = `${q}x de ${a.toLocaleString("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+      })}${r === 0 || r === null ? " sem juros" : ""}`;
+    }
   }
 
-  // 5) Imagem
+  // 5) imagem
   const image =
     og.image ||
-    (html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/")) ||
-    (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
+    html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/") ||
+    html.match(
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
     "";
 
-  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v3" };
+  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v4" };
 };
 
-
-// Substitua sua parseAmazon por esta
+/** Amazon v3 – lê preço do bloco oficial (inteiro+fração) + fallbacks */
 const parseAmazon = (html) => {
-  // 1) Título
   const title =
-    (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
-    clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+    html.match(
+      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    clean(
+      html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)
+        ?.[1] || ""
+    );
 
-  // 2) Tenta extrair do BLOCO OFICIAL DE PREÇO (desktop/mobile)
-  //    Esse bloco tem o "a-price-whole" e "a-price-fraction".
   const priceBlock =
     html.match(/id=["']corePriceDisplay_[^"']+["'][\s\S]{0,4000}?<\/div>/i)?.[0] ||
     html.match(/id=["']apex_desktop["'][\s\S]{0,4000}?<\/div>/i)?.[0] ||
     "";
 
-  let price = null, oldPrice = null;
+  let price = null,
+    oldPrice = null;
 
   if (priceBlock) {
-    const whole = priceBlock.match(/class=["']a-price-whole["'][^>]*>([\d\.\,]+)/i)?.[1];
-    const frac  = priceBlock.match(/class=["']a-price-fraction["'][^>]*>(\d{1,2})/i)?.[1];
+    const whole =
+      priceBlock.match(/class=["']a-price-whole["'][^>]*>([\d\.\,]+)/i)?.[1] ||
+      null;
+    const frac =
+      priceBlock.match(/class=["']a-price-fraction["'][^>]*>(\d{1,2})/i)?.[1] ||
+      null;
     if (whole && frac) {
       price = toNumber(`${whole},${frac}`);
     } else {
-      // fallback dentro do bloco (algumas páginas ainda rendem a-offscreen)
-      const off = priceBlock.match(/a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1];
+      const off =
+        priceBlock.match(/a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] || null;
       price = toNumber(off);
     }
 
-    // preço antigo (strike) dentro do mesmo bloco
     const oldInBlock =
-      priceBlock.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-      priceBlock.match(/id=["']priceblock_strikeprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      priceBlock.match(
+        /class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i
+      )?.[1] ||
+      priceBlock.match(
+        /id=["']priceblock_strikeprice["'][^>]*>(R\$\s?[\d\.\,]+)</i
+      )?.[1] ||
       null;
     oldPrice = toNumber(oldInBlock);
   }
 
-  // 3) Fallbacks globais (caso o bloco oficial não exista nesta variação)
   if (price == null) {
     const priceText =
       html.match(/id=["']priceblock_dealprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
       html.match(/id=["']priceblock_ourprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-      html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
+      html.match(
+        /<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i
+      )?.[1] ||
       html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
       html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
       html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
@@ -204,7 +253,9 @@ const parseAmazon = (html) => {
   }
   if (oldPrice == null) {
     const oldText =
-      html.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+      html.match(
+        /class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i
+      )?.[1] ||
       html.match(/(?:De:|Preço\s+de\s+tabela)[^<]*?(R\$\s?[\d\.\,]+)/i)?.[1] ||
       html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
       html.match(/"strikePrice"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
@@ -212,21 +263,26 @@ const parseAmazon = (html) => {
     oldPrice = toNumber(oldText);
   }
 
-  // 4) Parcelamento — pegue o MAIOR “Nx de R$ … (sem juros)”
-  //    (em algumas páginas aparecem várias opções; escolhemos a de maior N)
+  // Parcelamento: escolhe o maior Nx
   const allInstallments = Array.from(
-    html.matchAll(/(?:em\s+até\s+)?(\d{1,2})x[^<]{0,80}R\$\s?([\d\.\,]+)(?:\s+sem\s+juros)?/ig)
-  ).map(m => ({ n: parseInt(m[1], 10), val: m[2] }));
+    html.matchAll(
+      /(?:em\s+até\s+)?(\d{1,2})x[^<]{0,80}R\$\s?([\d\.\,]+)(?:\s+sem\s+juros)?/gi
+    )
+  ).map((m) => ({ n: parseInt(m[1], 10), val: m[2] }));
   let installment = "";
   if (allInstallments.length) {
-    const best = allInstallments.sort((a,b)=> b.n - a.n)[0];
-    installment = `${best.n}x de R$ ${best.val}${/sem\s+juros/i.test(html) ? " sem juros" : ""}`;
+    const best = allInstallments.sort((a, b) => b.n - a.n)[0];
+    installment = `${best.n}x de R$ ${best.val}${
+      /sem\s+juros/i.test(html) ? " sem juros" : ""
+    }`;
   }
 
-  // 5) Imagem (OG / data-old-hires / data-a-dynamic-image / landingImage)
+  // Imagem principal
   let image =
-    (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
-    (html.match(/data-old-hires=["']([^"']+)["']/i)?.[1]) ||
+    html.match(
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+    )?.[1] ||
+    html.match(/data-old-hires=["']([^"']+)["']/i)?.[1] ||
     "";
   if (!image) {
     const dyn = html.match(/data-a-dynamic-image=['"]({[^'"]+})['"]/i)?.[1];
@@ -239,19 +295,18 @@ const parseAmazon = (html) => {
     }
   }
   if (!image) {
-    image = html.match(/id=["']landingImage["'][^>]+src=["']([^"']+)["']/i)?.[1] || "";
+    image =
+      html.match(/id=["']landingImage["'][^>]+src=["']([^"']+)["']/i)?.[1] ||
+      "";
   }
 
   return { title, price, oldPrice, installment, image, parseHint: "amazon_html_v3" };
 };
 
-
-
 const parseShopee = (html) => {
   const og = tryOG(html);
   const title =
-    og.title ||
-    clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
+    og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
 
   const price =
     toNumber(html.match(/"price"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) ||
@@ -263,21 +318,21 @@ const parseShopee = (html) => {
     null;
 
   const image = og.image || "";
-  const installment = ""; // geralmente não vem fácil
+  const installment = "";
 
   return { title, price, oldPrice, installment, image, parseHint: "shopee_html" };
 };
 
 const parseGeneric = (html) => {
   const og = tryOG(html);
-  const title = og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
+  const title =
+    og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
   const price =
-    toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
-    toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) ||
-    null;
+    toNumber(
+      html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]
+    ) || toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) || null;
   const oldPrice =
-    toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) ||
-    null;
+    toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) || null;
   const image = og.image || "";
   const installment = "";
   return { title, price, oldPrice, installment, image, parseHint: "generic_og" };
@@ -292,16 +347,37 @@ export default async function handler(req, res) {
     if (!shortUrl) {
       res.statusCode = 400;
       res.setHeader("content-type", "application/json; charset=utf-8");
-      return res.end(JSON.stringify({ error: "Informe ?url=<link_encurtado_de_afiliado>" }));
+      return res.end(
+        JSON.stringify({ error: "Informe ?url=<link_encurtado_de_afiliado>" })
+      );
     }
 
     // 1) Baixa e EXPANDE a URL
-    const { html, finalUrl } = await fetchPageFollow(shortUrl);
-    const host = new URL(finalUrl).hostname.toLowerCase();
+    let { html, finalUrl } = await fetchPageFollow(shortUrl);
+    let host = new URL(finalUrl).hostname.toLowerCase();
+
+    // 1.1) Se for uma landing (ex.: /social/ do ML), ou existir canonical apontando para o produto,
+    //      seguimos o canonical UMA vez (comum em ML e outras redes).
+    const canonical =
+      html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)?.[1] ||
+      "";
+    const isMLSocal = host.includes("mercadolivre") && /\/social\//i.test(finalUrl);
+    if ((isMLSocal || canonical) && canonical) {
+      try {
+        const again = await fetchPageFollow(canonical);
+        html = again.html;
+        finalUrl = again.finalUrl;
+        host = new URL(finalUrl).hostname.toLowerCase();
+      } catch {}
+    }
 
     // 2) Decide parser pela URL FINAL (não pelo encurtado)
     let data = null;
-    if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) {
+    if (
+      host.includes("mercadolivre") ||
+      host.includes("mercadolibre") ||
+      host.includes("mlstatic")
+    ) {
       data = parseMercadoLivre(html);
     } else if (host.includes("amazon")) {
       data = parseAmazon(html);
@@ -311,7 +387,7 @@ export default async function handler(req, res) {
       data = parseGeneric(html);
     }
 
-    // 3) Monta payload — shareUrl SEMPRE é o link encurtado original (preserva tracking do painel)
+    // 3) Monta payload — shareUrl é SEMPRE o link encurtado original (preserva tracking do painel)
     const payload = {
       store: guessStore(finalUrl),
       title: clean(data?.title || ""),
@@ -320,8 +396,8 @@ export default async function handler(req, res) {
       installment: clean(data?.installment || ""),
       image: data?.image || "",
       shareUrl: shortUrl,
-      finalUrl: finalUrl,
-      parseHint: data?.parseHint || "n/a"
+      finalUrl,
+      parseHint: data?.parseHint || "n/a",
     };
 
     res.statusCode = 200;
@@ -330,19 +406,23 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify(payload));
   } catch (e) {
     console.error("[/api/parse] ERRO:", e?.message || e);
-    res.statusCode = 200; // mantém 200 para o front não estourar modal; devolve dados vazios e dica
+    // Mantém 200 para não quebrar o front; devolve dados vazios com nota.
+    res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
-    return res.end(JSON.stringify({
-      store: "Loja",
-      title: "",
-      price: null,
-      oldPrice: null,
-      installment: "",
-      image: "",
-      shareUrl: new URL(req.url, "http://localhost").searchParams.get("url") || "",
-      finalUrl: "",
-      parseHint: "error",
-      note: String(e?.message || e)
-    }));
+    return res.end(
+      JSON.stringify({
+        store: "Loja",
+        title: "",
+        price: null,
+        oldPrice: null,
+        installment: "",
+        image: "",
+        shareUrl:
+          new URL(req.url, "http://localhost").searchParams.get("url") || "",
+        finalUrl: "",
+        parseHint: "error",
+        note: String(e?.message || e),
+      })
+    );
   }
 }
