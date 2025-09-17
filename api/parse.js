@@ -1,42 +1,38 @@
 // api/parse.js
-// v2 – Node runtime, logs e mensagens de erro detalhadas.
-// Suporta ML, Amazon, Shopee + fallback genérico (JSON-LD/OG/metatags).
-
 export const config = { runtime: "nodejs" };
 
-// ---------- Utils ----------
-const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
+/* ... utils que você já tem (clean, toNumber, between, tryJSONLD, tryOG etc.) ... */
 
-const toNumber = (s) => {
-  if (s === null || s === undefined) return null;
-  const only = String(s).replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3}\b)/g, "");
-  const norm = only.replace(",", ".");
-  const n = parseFloat(norm);
-  return Number.isFinite(n) ? n : null;
+// === NEW: helpers Mercado Livre ===
+const extractMeliIdFromUrlOrHtml = (productUrl, html = "") => {
+  // tenta na URL
+  const uMatch = productUrl.match(/(MLB\d{6,})/i);
+  if (uMatch) return uMatch[1].toUpperCase();
+
+  // tenta no og:url
+  const ogUrl = (html.match(/property=["']og:url["'][^>]+content=["']([^"']+)["']/i)?.[1]) || "";
+  const ogMatch = ogUrl.match(/(MLB\d{6,})/i);
+  if (ogMatch) return ogMatch[1].toUpperCase();
+
+  // tenta em qualquer lugar do HTML
+  const any = html.match(/(MLB\d{6,})/i)?.[1];
+  return any ? any.toUpperCase() : null;
 };
 
-const between = (str, a, b) => {
-  const i = str.indexOf(a);
-  if (i === -1) return "";
-  const j = str.indexOf(b, i + a.length);
-  if (j === -1) return "";
-  return str.slice(i + a.length, j);
+const fetchMeliItem = async (id) => {
+  const r = await fetch(`https://api.mercadolibre.com/items/${id}`);
+  if (!r.ok) throw new Error(`ML API HTTP ${r.status}`);
+  const j = await r.json();
+  return {
+    title: j.title || "",
+    price: j.price ?? null,
+    oldPrice: j.original_price ?? null,
+    installment: "", // parcelas variam por vendedor; deixo vazio
+    image: j.pictures?.[0]?.secure_url || j.thumbnail || "",
+  };
 };
 
-const guessStore = (u) => {
-  try {
-    const host = new URL(u).hostname.toLowerCase();
-    if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) return "Mercado Livre";
-    if (host.includes("amazon")) return "Amazon";
-    if (host.includes("shopee")) return "Shopee";
-    if (host.includes("magalu") || host.includes("magazineluiza")) return "Magalu";
-    if (host.includes("americanas")) return "Americanas";
-    if (host.includes("kabum")) return "KaBuM!";
-    if (host.includes("casasbahia")) return "Casas Bahia";
-    return host.replace(/^www\./, "");
-  } catch { return "Loja"; }
-};
-
+// === seu fetchPage atual (Node headers) ===
 const fetchPage = async (url) => {
   const res = await fetch(url, {
     redirect: "follow",
@@ -48,155 +44,26 @@ const fetchPage = async (url) => {
       "upgrade-insecure-requests": "1",
       "cache-control": "no-cache",
       "pragma": "no-cache",
-      "sec-fetch-mode": "navigate",
-      "sec-fetch-dest": "document",
     },
   });
-  const status = res.status;
   const html = await res.text().catch(() => "");
-  if (!res.ok) {
-    const msg = html?.slice(0, 400) || "";
-    throw new Error(`HTTP ${status} ao buscar a página. Trecho: ${msg}`);
-  }
-  if (/Robot Check|captcha|Enter the characters you see|Are you a human\??/i.test(html)) {
-    throw new Error("A loja retornou verificação (captcha/robot). Tente novamente ou use a API oficial da loja.");
+  if (!res.ok) throw new Error(`HTTP ${res.status} ao buscar a página`);
+  if (/Robot Check|captcha|Are you a human/i.test(html)) {
+    throw new Error("A loja retornou verificação (captcha/robot).");
   }
   return html;
 };
 
-// ---------- Genéricos ----------
-const tryJSONLD = (html) => {
-  try {
-    const scripts = [...html.matchAll(
-      /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-    )].map(m => m[1]);
-    for (const raw of scripts) {
-      let json; try { json = JSON.parse(raw.trim()); } catch { continue; }
-      const arr = Array.isArray(json) ? json : [json];
-      for (const node of arr) {
-        const n = node || {};
-        const t = String(n["@type"] || n.type || "").toLowerCase();
-        if (t.includes("product")) {
-          const title = clean(n.name || n.headline || "");
-          const image = Array.isArray(n.image) ? n.image[0] : (n.image || "");
-          let price = null, oldPrice = null, installment = "";
-          if (n.offers) {
-            const off = Array.isArray(n.offers) ? n.offers[0] : n.offers;
-            price = toNumber(off?.price || off?.priceSpecification?.price);
-            if (off?.highPrice && off?.lowPrice && toNumber(off.highPrice) !== toNumber(off.lowPrice)) {
-              oldPrice = toNumber(off.highPrice);
-              price = toNumber(off.lowPrice) ?? price;
-            }
-          }
-          if (title || price || image) return { title, price, oldPrice, installment, image };
-        }
-      }
-    }
-  } catch {}
-  return null;
-};
+// === parsers específicos (MercadoLivre, Amazon, Shopee) e parseGeneric como você já tem ===
+// ... parseMercadoLivre(html) ...
+// ... parseAmazon(html) ...
+// ... parseShopee(html) ...
+// ... parseGeneric(html) ...
+// ... guessStore(url) ...
 
-const tryOG = (html) => {
-  const get = (prop) => html.match(new RegExp(
-    `<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']+)["']`, "i"
-  ))?.[1] || "";
-  return { title: clean(get("og:title")), image: get("og:image") };
-};
-
-// ---------- Parsers específicos ----------
-const parseMercadoLivre = (html) => {
-  let title = clean(between(html, '<h1 class="ui-pdp-title', "</h1>").replace(/^[^>]*>/, "")) || tryOG(html).title;
-  let priceStr =
-    between(html, 'itemprop="price" content="', '"') ||
-    html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]?.replace(/"/g, "") ||
-    html.match(/"price":\s*([\d\.]+)/)?.[1] || "";
-  const price = toNumber(priceStr);
-
-  let oldStr =
-    between(html, "price__original-value", "</s>").replace(/<[^>]+>/g, "") ||
-    html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]?.replace(/"/g, "") || "";
-  const oldPrice = toNumber(oldStr);
-
-  let installment = clean(
-    between(html, 'class="ui-vip-installments', "</").replace(/<[^>]+>/g, "")
-  );
-  if (!installment) {
-    const qtd = parseInt(html.match(/"installments"\s*:\s*{\s*"quantity"\s*:\s*(\d+)/)?.[1] || "", 10);
-    const val = toNumber(html.match(/"amount"\s*:\s*("?[\d\.,]+"?)/)?.[1] || "");
-    if (qtd && val) installment = `${qtd}x ${val.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})} sem juros`;
-  }
-
-  const og = tryOG(html);
-  const image = og.image ||
-    html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/") || "";
-
-  return { title, price, oldPrice, installment, image };
-};
-
-const parseAmazon = (html) => {
-  let title = tryOG(html).title ||
-    clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
-  const priceText =
-    html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
-    html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-    html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1];
-  const price = toNumber(priceText);
-
-  const oldText =
-    html.match(/priceBlockStrikePriceString[^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
-    html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] || null;
-  const oldPrice = toNumber(oldText);
-
-  let installment = clean((html.match(/em até[^<]+de[^<]+R\$\s?[\d\.\,]+/i)?.[0] || ""));
-  const og = tryOG(html);
-  const image = og.image ||
-    html.match(/data-old-hires=["']([^"']+)["']/i)?.[1] ||
-    html.match(/"hiRes"\s*:\s*"([^"]+)"/i)?.[1] || "";
-
-  return { title, price, oldPrice, installment, image };
-};
-
-const parseShopee = (html) => {
-  const og = tryOG(html);
-  let title = og.title;
-  const priceRaw =
-    html.match(/"price"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "") ||
-    html.match(/"price_min"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "") || null;
-  const price = toNumber(priceRaw);
-
-  const oldRaw =
-    html.match(/"price_before_discount"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "") || null;
-  const oldPrice = toNumber(oldRaw);
-
-  let installment = clean((html.match(/em até[^<]+de[^<]+R\$\s?[\d\.\,]+/i)?.[0] || ""));
-  const image = og.image || "";
-  return { title, price, oldPrice, installment, image };
-};
-
-const parseGeneric = (html) => {
-  const og = tryOG(html);
-  const title = og.title;
-
-  const price =
-    toNumber(between(html, 'product:price:amount" content="', '"')) ||
-    toNumber(between(html, 'itemprop="price" content="', '"')) ||
-    toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]?.replace(/"/g, "")) || null;
-
-  const oldPrice =
-    toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]?.replace(/"/g, "")) || null;
-
-  let installment = clean(
-    (between(html, ">em até", "</").replace(/<[^>]+>/g, "")) ||
-    (html.match(/em até[^<]+de[^<]+R\$\s?[\d\.\,]+/i)?.[0] || "")
-  );
-  return { title, price, oldPrice, installment, image: og.image || "" };
-};
-
-// ---------- Handler ----------
 export default async function handler(req, res) {
   try {
-    const base = `http://localhost`;
-    const urlObj = new URL(req.url, base);
+    const urlObj = new URL(req.url, "http://localhost");
     const productUrl = urlObj.searchParams.get("url");
     if (!productUrl) {
       res.statusCode = 400;
@@ -204,42 +71,70 @@ export default async function handler(req, res) {
       return res.end(JSON.stringify({ error: "Informe ?url=<link-do-produto>" }));
     }
 
-    const html = await fetchPage(productUrl);
-
-    let data = tryJSONLD(html);
     const host = new URL(productUrl).hostname.toLowerCase();
+    let html = "";
 
-    if (!data) {
-      if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) {
-        data = parseMercadoLivre(html);
-      } else if (host.includes("amazon")) {
-        data = parseAmazon(html);
-      } else if (host.includes("shopee")) {
-        data = parseShopee(html);
+    // 1) Para Mercado Livre, já tentamos pegar o ID antes mesmo do HTML
+    let payload = null;
+    if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) {
+      try {
+        html = await fetchPage(productUrl);
+      } catch (e) {
+        // mesmo sem HTML, dá pra tentar extrair MLB da própria URL
+        const idFromUrl = extractMeliIdFromUrlOrHtml(productUrl);
+        if (idFromUrl) {
+          const meli = await fetchMeliItem(idFromUrl);
+          payload = meli;
+        } else {
+          throw e; // sem ID e sem HTML, não há o que fazer
+        }
+      }
+
+      if (!payload) {
+        // tenta extrair MLB do HTML/og:url e chamar API oficial
+        const meliId = extractMeliIdFromUrlOrHtml(productUrl, html);
+        if (meliId) {
+          payload = await fetchMeliItem(meliId);
+        } else {
+          // se não achou ID, cai no parser por HTML
+          payload = parseMercadoLivre(html);
+        }
+      }
+    } else {
+      // Outras lojas: baixa HTML normalmente
+      html = await fetchPage(productUrl);
+
+      // 2) JSON-LD universal primeiro
+      payload = tryJSONLD(html);
+
+      // 3) Parsers por loja
+      if (!payload) {
+        if (host.includes("amazon")) payload = parseAmazon(html);
+        else if (host.includes("shopee")) payload = parseShopee(html);
+      }
+
+      // 4) Fallback genérico
+      if (!payload || (!payload.title && !payload.price && !payload.image)) {
+        payload = parseGeneric(html);
       }
     }
-    if (!data || (!data.title && !data.price && !data.image)) {
-      data = parseGeneric(html);
-    }
 
-    const payload = {
+    const response = {
       store: guessStore(productUrl),
-      title: clean(data?.title || ""),
-      price: data?.price ?? null,
-      oldPrice: data?.oldPrice ?? null,
-      installment: clean(data?.installment || ""),
-      image: data?.image || "",
+      title: clean(payload?.title || ""),
+      price: payload?.price ?? null,
+      oldPrice: payload?.oldPrice ?? null,
+      installment: clean(payload?.installment || ""),
+      image: payload?.image || "",
       url: productUrl,
     };
 
     res.statusCode = 200;
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.setHeader("cache-control", "public, max-age=60, s-maxage=300, stale-while-revalidate=600");
-    return res.end(JSON.stringify(payload));
+    return res.end(JSON.stringify(response));
   } catch (e) {
-    // Log útil na Vercel
-    console.error("[/api/parse] ERRO:", e?.message || e);
-
+    console.error("[parse] ERRO:", e?.message || e);
     res.statusCode = 500;
     res.setHeader("content-type", "application/json; charset=utf-8");
     return res.end(JSON.stringify({ error: String(e?.message || e) }));
