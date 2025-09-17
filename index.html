@@ -4,15 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gerador WhatsApp de Afiliados</title>
+  <meta name="description" content="Cole o link encurtado de afiliados e gere o texto pronto para WhatsApp.">
   <style>
     :root{
       --bg:#0b1020; --card:#0f172a; --text:#e6eeff; --muted:#9fb0cf;
-      --border:#1e293b; --accent:#22c55e; --primary:#2563eb; --danger:#ef4444;
+      --border:#1e293b; --accent:#22c55e; --primary:#2563eb;
     }
     *{box-sizing:border-box}
     body{margin:0; background:#0b1020; color:var(--text); font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
-    .wrap{max-width:880px; margin:30px auto; padding:0 16px}
-    h1{margin:0 0 12px; font-size:22px}
+    .wrap{max-width:980px; margin:28px auto 56px; padding:0 16px}
+    h1{margin:0 0 12px; font-size:24px}
     .card{background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
       border:1px solid var(--border); border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.3)}
     .row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
@@ -20,37 +21,41 @@
       border-radius:10px; border:1px solid var(--border); background:#0d1226; color:#fff; outline:none
     }
     input, textarea{padding:12px}
-    input{flex:1; min-width:260px}
+    input{flex:1; min-width:240px}
     textarea{width:100%; min-height:160px; resize:vertical}
     .btn{padding:12px 14px; cursor:pointer}
     .btn.primary{background:linear-gradient(180deg,#2563eb,#1d4ed8); border-color:#1d4ed8}
     .btn.success{background:linear-gradient(180deg,#22c55e,#16a34a); border-color:#16a34a}
     .btn.ghost{background:transparent}
-    .grid{display:grid; grid-template-columns: 160px 1fr; gap:16px; align-items:start}
-    .media{background:#0d1326; border:1px solid var(--border); border-radius:12px; overflow:hidden; aspect-ratio:1/1}
+    .grid{display:grid; grid-template-columns: 170px 1fr; gap:16px; align-items:start}
+    @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
+    .media{background:#0d1326; border:1px solid var(--border); border-radius:12px; overflow:hidden; aspect-ratio:1/1; display:flex; align-items:center; justify-content:center}
     .media img{width:100%; height:100%; object-fit:cover}
     .hint{color:var(--muted); font-size:13px}
-    .prices{display:flex; gap:14px; flex-wrap:wrap}
     .pill{border:1px solid var(--border); padding:6px 10px; border-radius:999px; font-size:13px; color:#c9d6f2}
     .ok{color:#86efac} .x{color:#ef9a9a; text-decoration:line-through}
     .preview{white-space:pre-wrap; background:#0b1224; border:1px dashed var(--border); border-radius:12px; padding:12px}
     .small{font-size:12px; color:var(--muted)}
+    .spacer{height:14px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Gerador WhatsApp de Afiliados</h1>
+
+    <!-- Barra de entrada do link encurtado -->
     <div class="card">
       <div class="row">
-        <input id="url" placeholder="Cole aqui o link do produto (Mercado Livre, Amazon, Shopee, Magalu…)" />
-        <input id="ref" placeholder="Parâmetro de campanha (opcional, ex.: insta)" style="max-width:220px" />
+        <input id="url" placeholder="Cole aqui o link ENCURTADO do seu painel (amzn.to, mercadolivre.com/sec, shopee encurtado...)" />
+        <input id="ref" placeholder="Parâmetro extra (opcional, ex.: campanha=insta)" style="max-width:280px" />
         <button id="parse" class="btn primary">Extrair dados</button>
       </div>
-      <div class="hint">Dica: a função serverless busca a página e tenta extrair título/preço/parcelas/imagem. Edite abaixo se precisar.</div>
+      <div class="hint">Dica: usamos a URL encurtada <b>como está</b> para compartilhar (preserva seu tracking). A expansão é só para coletar título/preço/imagem.</div>
     </div>
 
-    <div style="height:14px"></div>
+    <div class="spacer"></div>
 
+    <!-- Editor/preview -->
     <div class="card">
       <div class="grid">
         <div class="media"><img id="img" alt="Imagem do produto"></div>
@@ -67,10 +72,10 @@
             <input id="spec" placeholder="Especificações / complemento (opcional)" />
           </div>
 
-          <div class="row prices">
-            <input id="oldPrice" placeholder="Preço antigo (ex.: 569,00)" style="max-width:200px" />
-            <input id="price" placeholder="Preço atual (ex.: 549,00)" style="max-width:200px" />
-            <input id="installment" placeholder="Parcelas (ex.: 18x R$ 30,50 sem juros)" style="min-width:260px" />
+          <div class="row">
+            <input id="oldPrice" placeholder="Preço antigo (ex.: 569,00)" style="max-width:220px" />
+            <input id="price" placeholder="Preço atual (ex.: 549,00)" style="max-width:220px" />
+            <input id="installment" placeholder="Parcelas (ex.: 18x R$ 30,50 sem juros)" />
           </div>
 
           <div class="row">
@@ -78,13 +83,15 @@
           </div>
 
           <div class="row">
-            <input id="outUrl" placeholder="URL final (com seu link de afiliado)" />
+            <input id="shareUrl" placeholder="Link para compartilhar (encurtado do seu painel)" />
+            <input id="finalUrl" placeholder="URL expandida (apenas referência)" />
           </div>
 
           <div class="row">
             <button id="gen" class="btn success">Gerar texto e abrir WhatsApp</button>
             <button id="copy" class="btn">Copiar texto</button>
             <button id="previewBtn" class="btn ghost">Prévia</button>
+            <span id="hint" class="pill">pronto</span>
           </div>
 
           <div class="preview small" id="preview" style="display:none"></div>
@@ -94,21 +101,25 @@
   </div>
 
   <script>
+    // ---------- helpers ----------
     const el = (id) => document.getElementById(id);
+    const set = (id, v) => { el(id).value = v ?? ""; };
     const currency = (v) => {
-      if (!v) return "";
+      if (v === null || v === undefined || v === "") return "";
       const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^\d,.-]/g, "").replace(",", "."));
-      if (isNaN(n)) return v;
-      return n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+      if (isNaN(n)) return String(v);
+      return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
     };
-    const withRef = (url, ref) => {
-      if (!ref) return url;
-      try{
+    const withExtraParam = (url, kvText) => {
+      // kvText pode ser "r=insta" ou "campanha=xyz". Se vier vazio, retorna url.
+      if (!url || !kvText) return url;
+      const [k, ...rest] = kvText.split("=");
+      const v = rest.join("=") || "";
+      try {
         const u = new URL(url);
-        if (u.search) u.search += `&r=${encodeURIComponent(ref)}`;
-        else u.search = `?r=${encodeURIComponent(ref)}`;
+        if (k) u.searchParams.set(k, v);
         return u.toString();
-      }catch{ return url; }
+      } catch { return url; }
     };
     const buildText = () => {
       const emoji = el("emoji").value || "🔥";
@@ -117,66 +128,68 @@
       const oldPrice = el("oldPrice").value || "";
       const price = el("price").value || "";
       const installment = el("installment").value || "";
-      const link = withRef(el("outUrl").value || el("url").value || "", el("ref").value || "");
+      const share = withExtraParam(el("shareUrl").value || el("url").value || "", el("ref").value || "");
 
       const lines = [];
       lines.push(`${emoji} ${title}`);
       if (spec) lines.push(spec);
       if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`);
-      if (price) lines.push(`✅ ${currency(price)}`);
+      if (price)    lines.push(`✅ ${currency(price)}`);
       if (installment) lines.push(installment);
       lines.push("");
-      if (link) lines.push(link);
+      if (share) lines.push(share);
       return lines.join("\n");
     };
-
     const showPreview = () => {
       const p = el("preview");
       p.textContent = buildText();
       p.style.display = "block";
     };
+    const setHint = (msg) => { el("hint").textContent = msg; };
 
+    // ---------- eventos ----------
     el("previewBtn").onclick = showPreview;
 
     el("copy").onclick = async () => {
-      const txt = buildText();
-      try { await navigator.clipboard.writeText(txt); } catch {}
+      try { await navigator.clipboard.writeText(buildText()); setHint("copiado"); } catch { setHint("falha ao copiar"); }
       showPreview();
-      alert("Texto copiado!");
     };
 
     el("gen").onclick = () => {
       const txt = buildText();
-      // copia
       navigator.clipboard?.writeText(txt).catch(()=>{});
-      // abre WhatsApp
       const wa = `https://wa.me/?text=${encodeURIComponent(txt)}`;
       window.open(wa, "_blank", "noopener");
     };
 
     el("parse").onclick = async () => {
       const url = el("url").value.trim();
-      if (!url) { alert("Cole o link do produto."); return; }
+      if (!url) { alert("Cole o link encurtado do seu painel."); return; }
+      setHint("buscando...");
       try{
         const res = await fetch(`/api/parse?url=${encodeURIComponent(url)}`);
-        if (!res.ok) throw new Error(`Falha ao ler a página (${res.status})`);
         const data = await res.json();
 
-        el("store").value = data.store || "";
-        el("badge").value = data.store || "";
-        el("emoji").value = "🔥";
-        el("title").value = data.title || "";
-        el("spec").value = "";
-        el("oldPrice").value = data.oldPrice ? data.oldPrice : "";
-        el("price").value = data.price ? data.price : "";
-        el("installment").value = data.installment || "";
-        el("image").value = data.image || "";
-        el("outUrl").value = data.url || url;
-        if (data.image) el("img").src = data.image;
+        // preenche campos
+        set("store", data.store || "");
+        set("badge", data.store || "");
+        set("emoji", "🔥");
+        set("title", data.title || "");
+        set("spec", "");
+        set("oldPrice", data.oldPrice ?? "");
+        set("price", data.price ?? "");
+        set("installment", data.installment || "");
+        set("image", data.image || "");
+        set("shareUrl", data.shareUrl || url);
+        set("finalUrl", data.finalUrl || "");
 
+        if (data.image) el("img").src = data.image; else el("img").removeAttribute("src");
+
+        setHint(data.parseHint ? `ok (${data.parseHint})` : "ok");
         showPreview();
       }catch(e){
-        alert("Não consegui extrair automaticamente. Você pode preencher os campos manualmente.\n\n" + e.message);
+        setHint("erro");
+        alert("Não consegui extrair automaticamente. Você pode preencher os campos manualmente.\n\n" + (e.message || e));
       }
     };
   </script>
