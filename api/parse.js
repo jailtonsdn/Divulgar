@@ -89,35 +89,58 @@ const parseMercadoLivre = (html) => {
   return { title, price, oldPrice, installment, image, parseHint: "ml_html" };
 };
 
+// Substitua sua parseAmazon por esta
 const parseAmazon = (html) => {
-  // Título
+  // ---- Título ----
   const title =
     (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
     clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
 
-  // Preço (várias alternativas)
-  const price =
-    toNumber(html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1]) ||
-    toNumber(html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
-    toNumber(html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
-    toNumber(html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
+  // ---- Preço atual (várias tentativas) ----
+  const priceText =
+    // bloco novo "priceToPay"
+    html.match(/id=["']corePriceDisplay_[^"']+["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+    // deal price
+    html.match(/id=["']priceblock_dealprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+    // our price
+    html.match(/id=["']priceblock_ourprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+    // "a-offscreen" genérico (primeira ocorrência plausível)
+    html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
+    // blobs JSON (algumas páginas)
+    html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+    html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+    html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
     null;
+  const price = toNumber(priceText);
 
-  // Preço antigo
-  const oldPrice =
-    toNumber(html.match(/priceBlockStrikePriceString[^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1]) ||
-    toNumber(html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
+  // ---- Preço antigo (strike/basis/wasPrice) ----
+  const oldText =
+    // span riscado padrão
+    html.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+    // "De:" / "Preço de tabela"
+    html.match(/(?:De:|Preço\s+de\s+tabela)[^<]*?(R\$\s?[\d\.\,]+)/i)?.[1] ||
+    // ids legados
+    html.match(/id=["']priceblock_strikeprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
+    // JSON internos
+    html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
+    html.match(/"strikePrice"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
     null;
+  const oldPrice = toNumber(oldText);
 
-  // Parcelas (quando exibem texto)
-  const installment = clean(html.match(/em até[^<]+de[^<]+R\$\s?[\d\.\,]+/i)?.[0] || "");
+  // ---- Parcelamento (várias formas de texto) ----
+  let installment =
+    // “em até 10x de R$ 23,74 sem juros”
+    clean(html.match(/em\s+até\s+\d{1,2}x\s+de\s+R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "") ||
+    // “10x de R$ 23,74 sem juros”
+    clean(html.match(/\d{1,2}x\s+de\s+R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "") ||
+    // “parcelado em até 10x” etc.
+    clean(html.match(/parcelad[oa]\s+em\s+até\s+\d{1,2}x[^<]*R\$\s?[\d\.\,]+/i)?.[0] || "");
 
-  // Imagem principal
+  // ---- Imagem principal ----
   let image =
     (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
     (html.match(/data-old-hires=["']([^"']+)["']/i)?.[1]) ||
     "";
-
   if (!image) {
     // data-a-dynamic-image='{"https://...jpg":[500,500],"..."}'
     const dyn = html.match(/data-a-dynamic-image=['"]({[^'"]+})['"]/i)?.[1];
@@ -129,9 +152,14 @@ const parseAmazon = (html) => {
       } catch {}
     }
   }
+  if (!image) {
+    // fallback na imagem do "landingImage"
+    image = html.match(/id=["']landingImage["'][^>]+src=["']([^"']+)["']/i)?.[1] || "";
+  }
 
-  return { title, price, oldPrice, installment, image, parseHint: "amazon_html" };
+  return { title, price, oldPrice, installment, image, parseHint: "amazon_html_v2" };
 };
+
 
 const parseShopee = (html) => {
   const og = tryOG(html);
