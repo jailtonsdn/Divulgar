@@ -76,122 +76,90 @@ const fetchPageFollow = async (url) => {
  * - Se a página final for uma “social/landing”, o handler acima vai seguir o canonical antes de chegar aqui.
  * - Extrai preço atual/antigo do bloco `andes-money-amount` e parcelas do texto/JSON.
  */
+// ---- Mercado Livre v5 ----
 const parseMercadoLivre = (html) => {
   const og = tryOG(html);
 
-  // Título
+  // título
   const title =
     og.title ||
     clean(
-      html
-        .match(
-          /<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i
-        )?.[1]
+      html.match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]
         ?.replace(/<[^>]+>/g, "") || ""
     );
 
-  // 1) preço atual (fraction + cents) no segundo bloco
-  const secondLine =
-    html.match(/ui-pdp-price__second-line[\s\S]{0,1500}?<\/div>/i)?.[0] ||
-    html;
-  const currentBlock = secondLine.replace(
-    /andes-money-amount--previous[\s\S]*?<\/span>/gi,
-    ""
-  );
-  const pWhole =
-    currentBlock.match(
-      /andes-money-amount__fraction[^>]*>([\d\.]+)/i
-    )?.[1] || null;
-  const pCents =
-    currentBlock.match(
-      /andes-money-amount__cents[^>]*>(\d{1,2})/i
-    )?.[1] || "00";
-  let price = pWhole ? toNumber(`${pWhole},${pCents}`) : null;
+  // helper para extrair valor de um bloco andes-money-amount
+  const moneyFrom = (block) => {
+    if (!block) return null;
+    const whole = block.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1];
+    const cents = block.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] || "00";
+    return whole ? toNumber(`${whole},${cents}`) : null;
+  };
 
-  // 2) preço antigo (previous)
-  const prevBlock =
-    secondLine.match(
-      /andes-money-amount--previous[\s\S]{0,500}?<\/span>/i
-    )?.[0] || "";
-  const oWhole =
-    prevBlock.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1] ||
-    null;
-  const oCents =
-    prevBlock.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] ||
-    "00";
-  let oldPrice = oWhole ? toNumber(`${oWhole},${oCents}`) : null;
+  // 1) pega a "segunda linha" de preço
+  const secondLine = html.match(/ui-pdp-price__second-line[\s\S]{0,2000}?<\/div>/i)?.[0] || "";
 
-  // 3) fallbacks: itemprop/JSON prices
+  // 2) separa blocos previous vs current
+  const amountBlocks = [...secondLine.matchAll(/<span[^>]+class=["'][^"']*andes-money-amount[^"']*["'][\s\S]*?<\/span>/gi)]
+    .map(m => m[0]);
+
+  const prevBlocks = amountBlocks.filter(b => /andes-money-amount--previous/i.test(b));
+  const currBlocks = amountBlocks.filter(b => !/andes-money-amount--previous/i.test(b));
+
+  let oldPrice = null;
+  let price = null;
+
+  // previous: pega o maior (normalmente o "De: 899")
+  const prevValues = prevBlocks.map(moneyFrom).filter(v => v != null);
+  if (prevValues.length) oldPrice = prevValues.sort((a,b)=>b-a)[0];
+
+  // candidatos de preço atual: pega o MAIOR (ex.: 599,40 > 60,55 das parcelas)
+  const currValues = currBlocks.map(moneyFrom).filter(v => v != null);
+  if (currValues.length) price = currValues.sort((a,b)=>b-a)[0];
+
+  // 3) fallbacks via meta/JSON caso algo falhe
   if (price == null) {
     price =
-      toNumber(
-        html.match(
-          /itemprop=["']price["'][^>]*content=["']([^"']+)["']/i
-        )?.[1]
-      ) ||
-      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) ||
-      null;
+      toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
+      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
   }
-  if (oldPrice == null) {
-    oldPrice =
-      toNumber(
-        html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]
-      ) ||
-      toNumber(
-        html.match(/"original_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]
-      ) ||
-      null;
 
-    if (oldPrice == null) {
-      const pricesBlock =
-        html.match(/"prices"\s*:\s*{[\s\S]{0,6000}?}/i)?.[0] || "";
-      const regular = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)].map(
-        (x) => toNumber(x[1])
-      );
-      if (regular.length)
-        oldPrice = regular.filter(Boolean).sort((a, b) => b - a)[0];
-      if (price == null) {
-        const amounts = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(
-          (x) => toNumber(x[1])
-        );
-        if (amounts.length)
-          price = amounts.filter(Boolean).sort((a, b) => a - b)[0];
-      }
+  if (oldPrice == null || price == null) {
+    const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,6000}?}/i)?.[0] || "";
+    if (pricesBlock) {
+      // quando há regular_amount e amount, use-os diretamente
+      const regulars = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1]));
+      const amounts  = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1]));
+      const reg = regulars.filter(Boolean).sort((a,b)=>b-a)[0] ?? null;
+      const amt = amounts.filter(Boolean).sort((a,b)=>a-b)[0] ?? null; // menor tende a ser o atual (promoção)
+      if (oldPrice == null && reg != null) oldPrice = reg;
+      if (price == null && amt != null)   price    = amt;
     }
   }
 
-  // 4) parcelas (texto ou JSON installments)
+  // 4) parcelas: texto natural OU JSON installments
   let installment =
-    clean(
-      html.match(
-        /em\s+até\s+\d{1,2}x[^<]{0,80}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i
-      )?.[0] || ""
-    ) || "";
+    clean(html.match(/em\s+até\s+\d{1,2}x[^<]{0,80}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "");
   if (!installment) {
-    const instBlock =
-      html.match(/"installments"\s*:\s*{[\s\S]{0,400}?}/i)?.[0] || "";
+    const instBlock = html.match(/"installments"\s*:\s*{[\s\S]{0,400}?}/i)?.[0] || "";
     const q = parseInt(instBlock.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
     const a = toNumber(instBlock.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
     const r = toNumber(instBlock.match(/"rate"\s*:\s*([\d\.,]+)/i)?.[1] || "");
     if (q && a) {
-      installment = `${q}x de ${a.toLocaleString("pt-BR", {
-        style: "currency",
-        currency: "BRL",
-      })}${r === 0 || r === null ? " sem juros" : ""}`;
+      installment = `${q}x de ${a.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}${(r===0||r===null)?" sem juros":""}`;
     }
   }
 
   // 5) imagem
   const image =
     og.image ||
-    html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/") ||
-    html.match(
-      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-    )?.[1] ||
+    (html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/")) ||
+    (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
     "";
 
-  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v4" };
+  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v5" };
 };
+
 
 /** Amazon v3 – lê preço do bloco oficial (inteiro+fração) + fallbacks */
 const parseAmazon = (html) => {
