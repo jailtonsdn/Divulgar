@@ -1,13 +1,14 @@
 // api/parse.js
-// Node runtime (Vercel). Best-effort scraping + geração tentativa de link de afiliado sem usar APIs oficiais.
-// - Se AMAZON_TAG estiver setada nas ENV vars, será anexada automaticamente nos links da Amazon.
-// - Se AFFILIATE_CONVERTER_URL estiver setada, o endpoint tentará chamar essa URL (POST { url }) para obter link convertido.
-// - Fallback: retorna o link original e um hint informando que a conversão pode exigir API oficial.
+// Gerador de conteúdo para WhatsApp a partir de link encurtado de AFILIADOS.
+// - Segue redirecionamentos (amzn.to, /sec/, etc.) e usa a URL expandida para parse.
+// - NÃO usa API oficial das lojas. É "best-effort" (pode falhar em casos com captcha/robot).
+// - Retorna: { store, title, price, oldPrice, installment, image, shareUrl, finalUrl, parseHint }
 
 export const config = { runtime: "nodejs" };
 
-// ----------------- Utils -----------------
+/* ---------------- Utils ---------------- */
 const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
+
 const toNumber = (s) => {
   if (s === null || s === undefined) return null;
   const only = String(s).replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3}\b)/g, "");
@@ -15,30 +16,15 @@ const toNumber = (s) => {
   const n = parseFloat(norm);
   return Number.isFinite(n) ? n : null;
 };
+
 const tryOG = (html) => {
-  const getMeta = (p) => {
-    const re = new RegExp(`<meta[^>]+property=["']${p}["'][^>]+content=["']([^"']+)["']`, "i");
+  const get = (prop) => {
+    const re = new RegExp(`<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']+)["']`, "i");
     return html.match(re)?.[1] || "";
   };
-  return { title: clean(getMeta("og:title")), image: getMeta("og:image") };
+  return { title: clean(get("og:title")), image: get("og:image") };
 };
-const fetchPage = async (url) => {
-  const res = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
-      "cache-control": "no-cache",
-    },
-  });
-  const html = await res.text().catch(() => "");
-  if (!res.ok) throw new Error(`HTTP ${res.status} buscando a página`);
-  if (/Robot Check|captcha|Are you a human\??/i.test(html)) {
-    throw new Error("Bloqueio/captcha detectado na loja (robot check).");
-  }
-  return html;
-};
+
 const guessStore = (u) => {
   try {
     const h = new URL(u).hostname.toLowerCase();
@@ -46,182 +32,182 @@ const guessStore = (u) => {
     if (h.includes("amazon")) return "Amazon";
     if (h.includes("shopee")) return "Shopee";
     if (h.includes("magalu") || h.includes("magazineluiza")) return "Magalu";
+    if (h.includes("kabum")) return "KaBuM!";
     return h.replace(/^www\./, "");
   } catch { return "Loja"; }
 };
 
-// ----------------- Parsers (simples, best-effort) -----------------
+/**
+ * Faz o fetch da página seguindo redirecionamentos.
+ * Retorna { html, finalUrl } — importantíssimo usar finalUrl para decidir o parser.
+ */
+const fetchPageFollow = async (url) => {
+  const res = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+      "upgrade-insecure-requests": "1",
+      "cache-control": "no-cache",
+    },
+  });
+  const html = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(`HTTP ${res.status} ao buscar a página`);
+  if (/Robot Check|captcha|Are you a human\??|To discuss automated access/i.test(html)) {
+    throw new Error("Bloqueio/captcha detectado (robot check).");
+  }
+  return { html, finalUrl: res.url || url };
+};
+
+/* ---------------- Parsers por loja (best-effort) ---------------- */
 const parseMercadoLivre = (html) => {
   const og = tryOG(html);
-  let title = og.title || clean(html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || "");
-  let price = toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1] || html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1] || "");
-  let oldPrice = toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1] || "");
-  let installment = clean(html.match(/"installments"[\s\S]{0,200}/i)?.[0] || "");
-  const image = og.image || html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1] || "";
-  return { title, price, oldPrice, installment, image };
+  const title =
+    og.title ||
+    clean(html.match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g, "") || "");
+
+  const price =
+    toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
+    toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) ||
+    null;
+
+  const oldPrice =
+    toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) ||
+    null;
+
+  // tentativa simples de parcelas; varia muito
+  const installment =
+    clean(html.match(/em até[^<]{0,80}R\$\s?[\d\.\,]+/i)?.[0] || "");
+
+  const image =
+    og.image ||
+    (html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/")) ||
+    "";
+
+  return { title, price, oldPrice, installment, image, parseHint: "ml_html" };
 };
+
 const parseAmazon = (html) => {
-  const og = tryOG(html);
-  let title = og.title || clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
-  let price = toNumber(html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] || html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] || "");
-  let oldPrice = toNumber(html.match(/priceBlockStrikePriceString[^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] || "");
-  let installment = clean(html.match(/em até[^<]+de[^<]+R\$\s?[\d\.\,]+/i)?.[0] || "");
-  const image = og.image || html.match(/data-old-hires=["']([^"']+)["']/i)?.[1] || "";
-  return { title, price, oldPrice, installment, image };
+  // Título
+  const title =
+    (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
+    clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+
+  // Preço (várias alternativas)
+  const price =
+    toNumber(html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1]) ||
+    toNumber(html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
+    toNumber(html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
+    toNumber(html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
+    null;
+
+  // Preço antigo
+  const oldPrice =
+    toNumber(html.match(/priceBlockStrikePriceString[^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1]) ||
+    toNumber(html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1]) ||
+    null;
+
+  // Parcelas (quando exibem texto)
+  const installment = clean(html.match(/em até[^<]+de[^<]+R\$\s?[\d\.\,]+/i)?.[0] || "");
+
+  // Imagem principal
+  let image =
+    (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
+    (html.match(/data-old-hires=["']([^"']+)["']/i)?.[1]) ||
+    "";
+
+  if (!image) {
+    // data-a-dynamic-image='{"https://...jpg":[500,500],"..."}'
+    const dyn = html.match(/data-a-dynamic-image=['"]({[^'"]+})['"]/i)?.[1];
+    if (dyn) {
+      try {
+        const j = JSON.parse(dyn.replace(/&quot;/g, '"'));
+        const first = Object.keys(j)[0];
+        if (first) image = first;
+      } catch {}
+    }
+  }
+
+  return { title, price, oldPrice, installment, image, parseHint: "amazon_html" };
 };
+
 const parseShopee = (html) => {
   const og = tryOG(html);
-  const title = og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
-  const price = toNumber(html.match(/"price"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "") || null);
-  const oldPrice = toNumber(html.match(/"price_before_discount"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "") || null);
-  const installment = "";
+  const title =
+    og.title ||
+    clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
+
+  const price =
+    toNumber(html.match(/"price"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) ||
+    toNumber(html.match(/"price_min"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) ||
+    null;
+
+  const oldPrice =
+    toNumber(html.match(/"price_before_discount"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) ||
+    null;
+
   const image = og.image || "";
-  return { title, price, oldPrice, installment, image };
+  const installment = ""; // geralmente não vem fácil
+
+  return { title, price, oldPrice, installment, image, parseHint: "shopee_html" };
 };
+
 const parseGeneric = (html) => {
   const og = tryOG(html);
   const title = og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
-  const price = toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1] || html.match(/"price"\s*:\s*("?[\d\.\,]+"?)/)?.[1] || null);
-  const oldPrice = toNumber(html.match(/"list_price"\s*:\s*("?[\d\.\,]+"?)/)?.[1] || null);
-  const installment = "";
+  const price =
+    toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
+    toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) ||
+    null;
+  const oldPrice =
+    toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) ||
+    null;
   const image = og.image || "";
-  return { title, price, oldPrice, installment, image };
+  const installment = "";
+  return { title, price, oldPrice, installment, image, parseHint: "generic_og" };
 };
 
-// ----------------- Affiliate attempt (sem API) -----------------
-// Estratégia:
-// 1) Se AFFILIATE_CONVERTER_URL estiver configurada, tenta POST { url } e espera { affiliateUrl }.
-// 2) Se host Amazon e AMAZON_TAG estiver configurada, adiciona tag à url.
-// 3) Para demais lojas, adiciona parâmetros UTM/placeholder (não é garantia de comissionamento).
-const tryGenerateAffiliate = async (productUrl) => {
-  const env = process.env;
-  // 1) Rede conversora (opcional)
-  const converter = env.AFFILIATE_CONVERTER_URL;
-  if (converter) {
-    try {
-      const r = await fetch(converter, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: productUrl })
-      });
-      if (r.ok) {
-        const j = await r.json();
-        if (j?.affiliateUrl) return { affiliateUrl: j.affiliateUrl, affiliateHint: "convertido_via_rede" };
-      }
-    } catch (e) {
-      // se falhar, a gente continua para outras tentativas
-      console.warn("Affiliate converter failed:", e?.message || e);
-    }
-  }
-
-  // 2) Amazon simple append (se tiver TAG)
-  try {
-    const host = new URL(productUrl).hostname.toLowerCase();
-    if (host.includes("amazon")) {
-      const tag = process.env.AMAZON_TAG || "";
-      if (tag) {
-        try {
-          const u = new URL(productUrl);
-          // Amazon aceita 'tag' param (associates). Substitui ou adiciona.
-          u.searchParams.set("tag", tag);
-          return { affiliateUrl: u.toString(), affiliateHint: "amazon_tag_appended" };
-        } catch {}
-      } else {
-        return { affiliateUrl: productUrl, affiliateHint: "amazon_no_tag_provided" };
-      }
-    }
-
-    // 3) Mercado Livre / Shopee / Magalu - tentativa de UTM (não é link de afiliado real)
-    if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) {
-      const u = new URL(productUrl);
-      // adiciona utm mínimas para rastrear origem (útil localmente)
-      u.searchParams.set("utm_source", "gerador");
-      u.searchParams.set("utm_medium", "whatsapp");
-      return { affiliateUrl: u.toString(), affiliateHint: "meli_utms_added_no_guarantee" };
-    }
-    if (host.includes("shopee")) {
-      const u = new URL(productUrl);
-      u.searchParams.set("utm_source", "gerador");
-      u.searchParams.set("utm_medium", "whatsapp");
-      return { affiliateUrl: u.toString(), affiliateHint: "shopee_utms_added_no_guarantee" };
-    }
-    if (host.includes("magalu") || host.includes("magazineluiza")) {
-      const u = new URL(productUrl);
-      u.searchParams.set("utm_source", "gerador");
-      u.searchParams.set("utm_medium", "whatsapp");
-      return { affiliateUrl: u.toString(), affiliateHint: "magalu_utms_added_no_guarantee" };
-    }
-  } catch (e) {
-    // ignore
-  }
-
-  // Default: devolve original
-  return { affiliateUrl: productUrl, affiliateHint: "no_affiliate_possible" };
-};
-
-// ----------------- Handler -----------------
+/* ---------------- Handler ---------------- */
 export default async function handler(req, res) {
   try {
     const base = "http://localhost";
     const urlObj = new URL(req.url, base);
-    const productUrl = urlObj.searchParams.get("url");
-    if (!productUrl) {
+    const shortUrl = urlObj.searchParams.get("url"); // link encurtado do seu painel
+    if (!shortUrl) {
       res.statusCode = 400;
       res.setHeader("content-type", "application/json; charset=utf-8");
-      return res.end(JSON.stringify({ error: "Informe ?url=<link-do-produto>" }));
+      return res.end(JSON.stringify({ error: "Informe ?url=<link_encurtado_de_afiliado>" }));
     }
 
-    // baixa HTML (try)
-    let html = "";
-    try {
-      html = await fetchPage(productUrl);
-    } catch (e) {
-      // se bloqueou, ainda tentamos gerar affiliate e retornar hint
-      const affiliate = await tryGenerateAffiliate(productUrl);
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/json; charset=utf-8");
-      return res.end(JSON.stringify({
-        store: guessStore(productUrl),
-        title: "",
-        price: null,
-        oldPrice: null,
-        installment: "",
-        image: "",
-        url: productUrl,
-        affiliateUrl: affiliate.affiliateUrl,
-        affiliateHint: affiliate.affiliateHint,
-        note: "Não foi possível buscar HTML (bloqueio ou erro). Retornando affiliateHint."
-      }));
+    // 1) Baixa e EXPANDE a URL
+    const { html, finalUrl } = await fetchPageFollow(shortUrl);
+    const host = new URL(finalUrl).hostname.toLowerCase();
+
+    // 2) Decide parser pela URL FINAL (não pelo encurtado)
+    let data = null;
+    if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) {
+      data = parseMercadoLivre(html);
+    } else if (host.includes("amazon")) {
+      data = parseAmazon(html);
+    } else if (host.includes("shopee")) {
+      data = parseShopee(html);
+    } else {
+      data = parseGeneric(html);
     }
 
-    // tenta parsers específicos
-    const host = new URL(productUrl).hostname.toLowerCase();
-    let parsed = null;
-    // JSON-LD / OG
-    const og = tryOG(html);
-    if (og.title || og.image) parsed = { title: og.title, price: null, oldPrice: null, installment: "", image: og.image };
-
-    if (!parsed || (!parsed.title && !parsed.image)) {
-      if (host.includes("mercadolivre") || host.includes("mlstatic")) parsed = parseMercadoLivre(html);
-      else if (host.includes("amazon")) parsed = parseAmazon(html);
-      else if (host.includes("shopee")) parsed = parseShopee(html);
-      else parsed = parseGeneric(html);
-    }
-
-    // tenta gerar affiliate (best-effort sem API)
-    const affiliate = await tryGenerateAffiliate(productUrl);
-
-    // resposta final
+    // 3) Monta payload — shareUrl SEMPRE é o link encurtado original (preserva tracking do painel)
     const payload = {
-      store: guessStore(productUrl),
-      title: clean(parsed?.title || ""),
-      price: parsed?.price ?? null,
-      oldPrice: parsed?.oldPrice ?? null,
-      installment: clean(parsed?.installment || ""),
-      image: parsed?.image || "",
-      url: productUrl,
-      affiliateUrl: affiliate.affiliateUrl,
-      affiliateHint: affiliate.affiliateHint
+      store: guessStore(finalUrl),
+      title: clean(data?.title || ""),
+      price: data?.price ?? null,
+      oldPrice: data?.oldPrice ?? null,
+      installment: clean(data?.installment || ""),
+      image: data?.image || "",
+      shareUrl: shortUrl,
+      finalUrl: finalUrl,
+      parseHint: data?.parseHint || "n/a"
     };
 
     res.statusCode = 200;
@@ -230,8 +216,19 @@ export default async function handler(req, res) {
     return res.end(JSON.stringify(payload));
   } catch (e) {
     console.error("[/api/parse] ERRO:", e?.message || e);
-    res.statusCode = 500;
+    res.statusCode = 200; // mantém 200 para o front não estourar modal; devolve dados vazios e dica
     res.setHeader("content-type", "application/json; charset=utf-8");
-    return res.end(JSON.stringify({ error: String(e?.message || e) }));
+    return res.end(JSON.stringify({
+      store: "Loja",
+      title: "",
+      price: null,
+      oldPrice: null,
+      installment: "",
+      image: "",
+      shareUrl: new URL(req.url, "http://localhost").searchParams.get("url") || "",
+      finalUrl: "",
+      parseHint: "error",
+      note: String(e?.message || e)
+    }));
   }
 }
