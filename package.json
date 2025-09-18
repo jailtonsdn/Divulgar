@@ -1,0 +1,9 @@
+{
+  "name": "divulgarlink",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@sparticuz/chromium": "^120.0.0",
+    "puppeteer-core": "^22.7.1"
+  }
+}
