@@ -59,7 +59,7 @@ const fetchPageFollow = async (url) => {
 /* ---------- Parsers ---------- */
 
 // Mercado Livre – v8 (prioriza JSON "prices"; evita confundir parcela x preço)
-const parseMercadoLivre = (html) => {
+/* const parseMercadoLivre = (html) => {
   const og = tryOG(html);
 
   const title =
@@ -126,6 +126,121 @@ const parseMercadoLivre = (html) => {
 
   return { title, price, oldPrice, installment, image, parseHint: "ml_html_v8" };
 };
+
+*/
+
+// ---------- Mercado Livre v9 (JSON prices + PRELOADED_STATE fallback) ----------
+const parseMercadoLivre = (html) => {
+  const og = tryOG(html);
+
+  const title =
+    og.title ||
+    clean(
+      html.match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]
+        ?.replace(/<[^>]+>/g, "") || ""
+    );
+
+  let price = null, oldPrice = null, installment = "";
+
+  // 1) bloco "prices" que costuma vir no HTML SSR
+  const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,60000}?}/i)?.[0] || "";
+  if (pricesBlock) {
+    const amounts = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1])).filter(Boolean);
+    const regulars = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1])).filter(Boolean);
+    if (amounts.length)  price    = amounts.sort((a,b)=>a-b)[0];   // menor = promocional
+    if (regulars.length) oldPrice = regulars.sort((a,b)=>b-a)[0];  // maior = "De:"
+    // coerência básica
+    if (price != null && oldPrice != null && price >= oldPrice) {
+      const p = amounts.sort((a,b)=>a-b).find(v => v < oldPrice);
+      if (p) price = p;
+    }
+    // installments JSON
+    const instBlock = pricesBlock + (html.match(/"installments"\s*:\s*{[\s\S]{0,2000}?}/i)?.[0] || "");
+    const q = parseInt(instBlock.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
+    const a = toNumber(instBlock.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
+    const r = toNumber(instBlock.match(/"rate"\s*:\s*([\d\.,]+)/i)?.[1] || "");
+    if (q && a) {
+      installment = `${q}x de ${a.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}${(r===0||r===null)?" sem juros":""}`;
+    }
+  }
+
+  // 2) Fallback leve: metas/itemprop e texto solto
+  if (price == null) {
+    price =
+      toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
+      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
+  }
+  if (oldPrice == null) {
+    oldPrice =
+      toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) ||
+      toNumber(html.match(/"original_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
+  }
+  if (!installment) {
+    installment = clean(
+      html.match(/em\s+até\s+\d{1,2}x[^<]{0,120}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || ""
+    );
+  }
+
+  // 3) Fallback robusto: varrer __PRELOADED_STATE__ (React) quando nada acima vier
+  const needDeep =
+    (price == null && oldPrice == null) || (!installment && !/x/i.test(installment||""));
+  if (needDeep) {
+    // pega qualquer JSON grande embutido (inclui __PRELOADED_STATE__)
+    const bigJsons = [
+      ...html.matchAll(/__PRELOADED_STATE__\s*=\s*({[\s\S]*?});?\s*<\/script>/gi),
+      ...html.matchAll(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi),
+      ...html.matchAll(/<script[^>]*>\s*({[\s\S]*?})\s*<\/script>/gi)
+    ].map(m => m[1]).slice(0,5); // limita por segurança
+
+    const nums = { amount:[], regular:[], inst:[] };
+    const pushNum = (arr, v) => { const n = toNumber(v); if (n) arr.push(n); };
+
+    for (const raw of bigJsons) {
+      try {
+        const j = JSON.parse(raw
+          .replace(/&quot;/g,'"')
+          .replace(/\\u002F/g,'/'));
+        // varredura recursiva procurando chaves relevantes
+        const walk = (o) => {
+          if (!o || typeof o !== "object") return;
+          for (const k of Object.keys(o)) {
+            const v = o[k];
+            const lk = k.toLowerCase();
+            if (lk === "amount")            pushNum(nums.amount, v);
+            if (lk === "regular_amount")    pushNum(nums.regular, v);
+            if (lk === "price")             pushNum(nums.amount, v);
+            if (lk === "list_price" || lk === "original_price") pushNum(nums.regular, v);
+
+            if (lk === "installments" && v && typeof v === "object") {
+              const q = toNumber(v.quantity);
+              const a = toNumber(v.amount);
+              const r = toNumber(v.rate);
+              if (q && a) nums.inst.push({ q, a, r });
+            }
+            if (v && typeof v === "object") walk(v);
+          }
+        };
+        walk(j);
+      } catch {}
+    }
+
+    if (nums.amount.length && price == null) price = nums.amount.sort((a,b)=>a-b)[0];
+    if (nums.regular.length && oldPrice == null) oldPrice = nums.regular.sort((a,b)=>b-a)[0];
+    if (nums.inst.length && !installment) {
+      const best = nums.inst.sort((a,b)=>b.q - a.q)[0];
+      installment = `${best.q}x de ${best.a.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}${(best.r===0||best.r==null)?" sem juros":""}`;
+    }
+  }
+
+  // 4) imagem
+  const image =
+    og.image ||
+    html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/") ||
+    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] || "";
+
+  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v9" };
+};
+
 
 // Amazon – v3
 const parseAmazon = (html) => {
