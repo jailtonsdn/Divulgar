@@ -76,7 +76,7 @@ const fetchPageFollow = async (url) => {
  * - Se a página final for uma “social/landing”, o handler acima vai seguir o canonical antes de chegar aqui.
  * - Extrai preço atual/antigo do bloco `andes-money-amount` e parcelas do texto/JSON.
  */
-// ---- Mercado Livre v7 (robusto: separa previous x atual) ----
+// ---- Mercado Livre v4.1 (fix: crases + coerência entre preços) ----
 const parseMercadoLivre = (html) => {
   const og = tryOG(html);
 
@@ -84,95 +84,93 @@ const parseMercadoLivre = (html) => {
   const title =
     og.title ||
     clean(
-      html.match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]
+      html
+        .match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]
         ?.replace(/<[^>]+>/g, "") || ""
     );
 
-  // Helper para extrair valor de um bloco "andes-money-amount"
-  const moneyFrom = (block) => {
-    if (!block) return null;
-    const whole = block.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1];
-    const cents = block.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] || "00";
-    return whole ? toNumber(`${whole},${cents}`) : null;
-  };
+  // 1) preço atual (fraction + cents) no segundo bloco (pega e remove o previous)
+  const secondLine = html.match(/ui-pdp-price__second-line[\s\S]{0,8000}?<\/div>/i)?.[0] || html;
+  const currentBlock = secondLine.replace(/andes-money-amount--previous[\s\S]*?<\/span>/gi, "");
 
-  // “Segunda linha” de preço (se não achar, usa HTML inteiro como fallback)
-  const secondLine = html.match(/ui-pdp-price__second-line[\s\S]*?<\/div>/i)?.[0] || html;
+  const pWhole = currentBlock.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1] || null;
+  const pCents = currentBlock.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] || "00";
+  let price = pWhole ? toNumber(`${pWhole},${pCents}`) : null;   // <- crases corrigidas
 
-  // Captura TODOS os blocos de preço visíveis nessa linha
-  const blocks = [...secondLine.matchAll(
-    /<span[^>]+class=["'][^"']*andes-money-amount[^"']*["'][\s\S]*?<\/span>/gi
-  )].map(m => m[0]);
+  // 2) preço antigo (previous)
+  const prevBlock = secondLine.match(/andes-money-amount--previous[\s\S]{0,2000}?<\/span>/i)?.[0] || "";
+  const oWhole = prevBlock.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1] || null;
+  const oCents = prevBlock.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] || "00";
+  let oldPrice = oWhole ? toNumber(`${oWhole},${oCents}`) : null; // <- crases corrigidas
 
-  // Separa previous (preço antigo) x candidatos (não-previous)
-  const prevBlocks = blocks.filter(b => /andes-money-amount--previous/i.test(b));
-  const currBlocks = blocks.filter(b => !/andes-money-amount--previous/i.test(b));
-
-  // Extrai números
-  const prevValues = prevBlocks.map(moneyFrom).filter(v => v != null);
-  const currValues = currBlocks.map(moneyFrom).filter(v => v != null);
-
-  // Preço antigo = maior previous (ex.: 899)
-  let oldPrice = prevValues.length ? prevValues.sort((a,b)=>b-a)[0] : null;
-
-  // Preço atual:
-  // - se temos oldPrice, escolhe o MAIOR candidato que seja < oldPrice (promo);
-  // - senão, escolhe o MAIOR candidato (preço de venda).
-  let price = null;
-  if (currValues.length) {
-    if (oldPrice != null) {
-      const underOld = currValues.filter(v => v < oldPrice);
-      price = (underOld.length ? underOld.sort((a,b)=>b-a)[0] : currValues.sort((a,b)=>b-a)[0]) || null;
+  // 3) coerência: se price >= oldPrice, tenta ajustar
+  if (price != null && oldPrice != null && price >= oldPrice) {
+    // a) tenta JSON "prices": menor amount < oldPrice
+    const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,40000}?}/i)?.[0] || "";
+    const amounts = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)]
+      .map(m => toNumber(m[1])).filter(v => v && v > 0).sort((a,b)=>a-b);
+    const candidate = amounts.find(v => v < oldPrice);
+    if (candidate) {
+      price = candidate;
     } else {
-      price = currValues.sort((a,b)=>b-a)[0];
+      // b) pega todos os blocos não-previous e escolhe o MAIOR < oldPrice (evita valores de parcelas)
+      const currBlocks = [...currentBlock.matchAll(
+        /<span[^>]+class=["'][^"']*andes-money-amount[^"']*["'][\s\S]*?<\/span>/gi
+      )].map(m => m[0]);
+      const vals = currBlocks.map(b => {
+        const w = b.match(/andes-money-amount__fraction[^>]*>([\d\.]+)/i)?.[1];
+        const c = b.match(/andes-money-amount__cents[^>]*>(\d{1,2})/i)?.[1] || "00";
+        return w ? toNumber(`${w},${c}`) : null;
+      }).filter(v => v != null && v < oldPrice);
+      if (vals.length) price = vals.sort((a,b)=>b-a)[0];
     }
   }
 
-  // Fallbacks: meta itemprop/JSON "prices"
+  // 4) fallbacks: itemprop/JSON prices (se ainda faltou algo)
   if (price == null) {
     price =
       toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
-      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) ||
-      null;
+      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
   }
+  if (oldPrice == null) {
+    oldPrice =
+      toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) ||
+      toNumber(html.match(/"original_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
 
-  if (oldPrice == null || price == null) {
-    const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,20000}?}/i)?.[0] || "";
-    if (pricesBlock) {
-      const regulars = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)]
-        .map(m => toNumber(m[1])).filter(Boolean);
-      const amounts  = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)]
-        .map(m => toNumber(m[1])).filter(Boolean);
-
-      // regular_amount normalmente é o preço "De:"
-      if (oldPrice == null && regulars.length) oldPrice = regulars.sort((a,b)=>b-a)[0];
-
-      // amount costuma trazer o preço vigente (em promo, o menor)
-      if (price == null && amounts.length)   price    = amounts.sort((a,b)=>a-b)[0];
+    if (oldPrice == null) {
+      const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,6000}?}/i)?.[0] || "";
+      const regular = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)]
+        .map(x => toNumber(x[1])).filter(Boolean);
+      if (regular.length) oldPrice = regular.sort((a,b)=>b-a)[0];
+      if (price == null) {
+        const amounts = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)]
+          .map(x => toNumber(x[1])).filter(Boolean);
+        if (amounts.length) price = amounts.sort((a,b)=>a-b)[0];
+      }
     }
   }
 
-  // Parcelas — texto OU JSON installments
+  // 5) parcelas (texto ou JSON installments)
   let installment =
-    clean(html.match(/em\s+até\s+\d{1,2}x[^<]{0,80}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "");
+    clean(html.match(/em\s+até\s+\d{1,2}x[^<]{0,80}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || "") || "";
   if (!installment) {
-    const inst = html.match(/"installments"\s*:\s*{[\s\S]{0,1200}?}/i)?.[0] || "";
-    const q = parseInt(inst.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
-    const a = toNumber(inst.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
-    const r = toNumber(inst.match(/"rate"\s*:\s*([\d\.,]+)/i)?.[1] || "");
+    const instBlock = html.match(/"installments"\s*:\s*{[\s\S]{0,400}?}/i)?.[0] || "";
+    const q = parseInt(instBlock.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
+    const a = toNumber(instBlock.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
+    const r = toNumber(instBlock.match(/"rate"\s*:\s*([\d\.,]+)/i)?.[1] || "");
     if (q && a) {
       installment = `${q}x de ${a.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}${(r===0||r===null)?" sem juros":""}`;
     }
   }
 
-  // Imagem
+  // 6) imagem
   const image =
     og.image ||
-    (html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/")) ||
-    (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1]) ||
+    html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/") ||
+    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
     "";
 
-  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v7" };
+  return { title, price, oldPrice, installment, image, parseHint: "ml_html_v4_fix" };
 };
 
 
