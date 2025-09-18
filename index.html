@@ -149,23 +149,50 @@
       if (isNaN(n)) return String(v);
       return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
     };
-    const buildText = () => {
-      const emoji = el("emoji").value || "🔥";
-      const title = el("title").value || "";
-      const oldPrice = el("oldPrice").value || "";
-      const price = el("price").value || "";
-      const installment = el("installment").value || "";
-      const share = el("shareUrl").value || el("url").value || "";
+    // Normaliza "6x de R$ 36,50 sem juros" -> "💳 6X R$36,50"
+const normalizeInstallment = (s) => {
+  if (!s) return "";
+  const q = (s.match(/(\d{1,2})\s*x/i) || [])[1];                 // 6x / 12X ...
+  // tenta capturar "1.234,56" ou "36,50"
+  let amt = (s.match(/(\d{1,3}(?:\.\d{3})*,\d{2})/) || [])[1];
+  if (!amt) {
+    const n = toNumber(s);
+    if (Number.isFinite(n)) amt = n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (!q || !amt) return "";
+  return `💳 ${q.toUpperCase()}X R$${amt.replace(/^R\$\s*/i, "")}`;
+};
 
-      const lines = [];
-      lines.push(`${emoji} ${title}`);
-      if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`);
-      if (price)    lines.push(`✅ ${currency(price)}`);
-      if (installment) lines.push(installment);
-      lines.push("");
-      if (share) lines.push(share);
-      return lines.join("\n");
-    };
+const buildText = () => {
+  const store = el("store").value || "Mercado Livre";
+  const emoji = el("emoji").value || "🔥";
+  const title = el("title").value || "";
+  const oldPrice = el("oldPrice").value || "";
+  const price = el("price").value || "";
+  const installmentRaw = el("installment").value || "";
+  const share = el("shareUrl").value || el("url").value || "";
+
+  const installment = normalizeInstallment(installmentRaw);
+
+  const lines = [];
+  // linha 1: loja
+  lines.push(store);
+  // linha 2: emoji + título
+  lines.push(`${emoji} ${title}`);
+  // linha 3: linha em branco
+  lines.push("");
+  // linhas 4..6: preços e parcelas
+  if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`);
+  if (price)    lines.push(`✅ ${currency(price)}`);
+  if (installment) lines.push(installment);
+  // linha 7: em branco
+  lines.push("");
+  // linha 8: link
+  if (share) lines.push(share);
+
+  return lines.join("\n");
+};
+
     const showPreview = () => {
       const p = el("preview");
       p.textContent = buildText();
