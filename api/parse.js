@@ -1,14 +1,10 @@
 // api/parse.js
-// Gera dados a partir de link encurtado de afiliados (amzn.to, mercadolivre.com/sec, shopee encurtado...)
+// Gera dados a partir de link encurtado (amzn.to, mercadolivre.com/sec, shopee encurtado...)
 // Estratégia:
 // 1) Expande a URL e segue <link rel="canonical"> quando houver landing.
-// 2) Tenta parse "rápido" por HTML/JSON embutido.
-// 3) Se for Mercado Livre e faltar preço/parcelas, usa HEADLESS (Puppeteer) para renderizar e extrair.
-
+// 2) Parse “rápido” por HTML/JSON embutido.
+// 3) Se for Mercado Livre E continuar sem preço/parcelas, ativa fallback headless (Puppeteer).
 export const config = { runtime: "nodejs" };
-
-import chromium from "@sparticuz/chromium";
-import puppeteer from "puppeteer-core";
 
 /* ---------------- Utils ---------------- */
 const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
@@ -58,9 +54,7 @@ const fetchPageFollow = async (url) => {
   return { html, finalUrl: res.url || url };
 };
 
-/* ---------------- Parsers rápidos (HTML/JSON) ---------------- */
-
-// Mercado Livre – rápido (JSON "prices" + fallbacks)
+/* ---------------- Parsers rápidos ---------------- */
 const parseMLFast = (html) => {
   const og = tryOG(html);
   const title =
@@ -72,7 +66,7 @@ const parseMLFast = (html) => {
 
   let price = null, oldPrice = null, installment = "";
 
-  // JSON "prices"
+  // JSON “prices” (quando SSR entrega)
   const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,40000}?}/i)?.[0] || "";
   if (pricesBlock) {
     const amounts  = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1])).filter(Boolean);
@@ -83,7 +77,7 @@ const parseMLFast = (html) => {
       const alt = amounts.sort((a,b)=>a-b).find(v => v < oldPrice);
       if (alt) price = alt;
     }
-    // installments do próprio bloco
+    // installments do bloco
     const instBlock = pricesBlock + (html.match(/"installments"\s*:\s*{[\s\S]{0,2000}?}/i)?.[0] || "");
     const q = parseInt(instBlock.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
     const a = toNumber(instBlock.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
@@ -117,7 +111,6 @@ const parseMLFast = (html) => {
   return { title, price, oldPrice, installment, image, parseHint: "ml_fast" };
 };
 
-// Amazon – v3 (OK)
 const parseAmazon = (html) => {
   const title =
     html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
@@ -203,10 +196,14 @@ const parseGeneric = (html) => {
   return { title, price, oldPrice, installment, image, parseHint: "generic_og" };
 };
 
-/* ---------------- Fallback headless p/ Mercado Livre ---------------- */
+/* ---------------- Fallback headless (carregado dinamicamente) ---------------- */
 async function renderMLFallback(url) {
   let browser;
   try {
+    // imports DINÂMICOS evitam crash no cold start quando não for usar headless
+    const chromium = (await import("@sparticuz/chromium")).default;
+    const puppeteer = (await import("puppeteer-core")).default;
+
     browser = await puppeteer.launch({
       args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
       executablePath: await chromium.executablePath(),
@@ -219,28 +216,22 @@ async function renderMLFallback(url) {
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
     );
-
-    // Nordeste: timezone ajuda a receber o template correto
     try { await page.emulateTimezone("America/Fortaleza"); } catch {}
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-    // dá tempo do React hidratar
     await page.waitForTimeout(1200);
 
     const result = await page.evaluate(() => {
       const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
-
       const title =
         document.querySelector("h1.ui-pdp-title")?.textContent ||
         document.querySelector('meta[property="og:title"]')?.content ||
         document.title;
 
-      // preço atual
-      const frac = document.querySelector(".ui-pdp-price__second-line .andes-money-amount__fraction");
+      const frac  = document.querySelector(".ui-pdp-price__second-line .andes-money-amount__fraction");
       const cents = document.querySelector(".ui-pdp-price__second-line .andes-money-amount__cents");
       const priceStr = frac ? `${frac.textContent},${(cents && cents.textContent) || "00"}` : "";
 
-      // preço antigo
       const prev = document.querySelector(".andes-money-amount--previous");
       let oldStr = "";
       if (prev) {
@@ -249,7 +240,6 @@ async function renderMLFallback(url) {
         if (wf) oldStr = `${wf.textContent},${(wc && wc.textContent) || "00"}`;
       }
 
-      // parcelas – aproximação
       let instTxt = "";
       const m = document.body.innerText.match(/(\d{1,2})x\s+de\s+R\$\s*[\d\.\,]+(?:\s+sem\s+juros)?/i);
       if (m) instTxt = m[0];
@@ -259,7 +249,7 @@ async function renderMLFallback(url) {
         document.querySelector('img.ui-pdp-image')?.src ||
         document.querySelector('figure img')?.src || "";
 
-      return { title: clean(title), priceStr: priceStr && clean(priceStr), oldStr: oldStr && clean(oldStr), instTxt: clean(instTxt), image };
+      return { title: clean(title), priceStr: clean(priceStr), oldStr: clean(oldStr), instTxt: clean(instTxt), image };
     });
 
     return {
@@ -277,20 +267,23 @@ async function renderMLFallback(url) {
 
 /* ---------------- Handler ---------------- */
 export default async function handler(req, res) {
+  const safeReply = (obj) => {
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "public, max-age=10, s-maxage=60");
+    res.end(JSON.stringify(obj));
+  };
+
   try {
     const urlObj = new URL(req.url, "http://localhost");
     const shortUrl = urlObj.searchParams.get("url");
-    if (!shortUrl) {
-      res.statusCode = 400;
-      res.setHeader("content-type", "application/json; charset=utf-8");
-      return res.end(JSON.stringify({ error: "Informe ?url=<link_encurtado_de_afiliado>" }));
-    }
+    if (!shortUrl) return safeReply({ error: "Informe ?url=<link_encurtado_de_afiliado>" });
 
     // 1) expandir
     let { html, finalUrl } = await fetchPageFollow(shortUrl);
     let host = new URL(finalUrl).hostname.toLowerCase();
 
-    // canonical se landing (ex.: /social/ do ML)
+    // canonical (landing /social do ML)
     const canonical = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)?.[1] || "";
     const isMLSocal = host.includes("mercadolivre") && /\/social\//i.test(finalUrl);
     if ((isMLSocal || canonical) && canonical) {
@@ -312,24 +305,20 @@ export default async function handler(req, res) {
       data = parseGeneric(html);
     }
 
-    // 3) Fallback headless só para ML se faltar preço/parcelas
+    // 3) fallback headless SÓ para ML e SÓ se faltou tudo
     if ((host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) &&
         (data.price == null && data.oldPrice == null && !data.installment)) {
       try {
         const deep = await renderMLFallback(finalUrl);
-        // mantém o que já veio, completa só o que faltou
-        data = {
-          ...data,
-          ...Object.fromEntries(Object.entries(deep).filter(([k,v]) => v)) // preenche somente valores verdadeiros
-        };
+        data = { ...data, ...Object.fromEntries(Object.entries(deep).filter(([_,v]) => v)) };
       } catch (e) {
-        // Se headless falhar, seguimos com o que tínhamos
+        // se o headless falhar, seguimos com o que houver (evita 500 do Vercel)
       }
     }
 
-    // 4) payload normalizado
+    // 4) payload
     const asNum = (x) => (typeof x === "number" ? x : toNumber(x));
-    const payload = {
+    return safeReply({
       store: guessStore(finalUrl),
       title: clean(data?.title || ""),
       price: asNum(data?.price),
@@ -338,17 +327,11 @@ export default async function handler(req, res) {
       image: data?.image || "",
       shareUrl: shortUrl,
       finalUrl,
-      parseHint: data?.parseHint || "n/a",
-    };
-
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json; charset=utf-8");
-    res.setHeader("cache-control", "public, max-age=30, s-maxage=120");
-    return res.end(JSON.stringify(payload));
+      parseHint: data?.parseHint || "n/a"
+    });
   } catch (e) {
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json; charset=utf-8");
-    return res.end(JSON.stringify({
+    // Nunca devolve HTML; sempre JSON (evita “Unexpected token A” no front).
+    return safeReply({
       store: "Loja",
       title: "",
       price: null,
@@ -358,7 +341,7 @@ export default async function handler(req, res) {
       shareUrl: new URL(req.url, "http://localhost").searchParams.get("url") || "",
       finalUrl: "",
       parseHint: "error",
-      note: String(e?.message || e),
-    }));
+      note: String(e?.message || e)
+    });
   }
 }
