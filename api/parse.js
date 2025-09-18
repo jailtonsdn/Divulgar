@@ -1,347 +1,212 @@
-// api/parse.js
-// Gera dados a partir de link encurtado (amzn.to, mercadolivre.com/sec, shopee encurtado...)
-// Estratégia:
-// 1) Expande a URL e segue <link rel="canonical"> quando houver landing.
-// 2) Parse “rápido” por HTML/JSON embutido.
-// 3) Se for Mercado Livre E continuar sem preço/parcelas, ativa fallback headless (Puppeteer).
-export const config = { runtime: "nodejs" };
-
-/* ---------------- Utils ---------------- */
-const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
-const toNumber = (s) => {
-  if (s === null || s === undefined) return null;
-  const only = String(s).replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3}\b)/g, "");
-  const n = parseFloat(only.replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-};
-const tryOG = (html) => {
-  const get = (prop) => {
-    const re = new RegExp(
-      `<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']+)["']`,
-      "i"
-    );
-    return html.match(re)?.[1] || "";
-  };
-  return { title: clean(get("og:title")), image: get("og:image") };
-};
-const guessStore = (u) => {
-  try {
-    const h = new URL(u).hostname.toLowerCase();
-    if (h.includes("mercadolivre") || h.includes("mercadolibre") || h.includes("mlstatic")) return "Mercado Livre";
-    if (h.includes("amazon")) return "Amazon";
-    if (h.includes("shopee")) return "Shopee";
-    if (h.includes("magalu") || h.includes("magazineluiza")) return "Magalu";
-    if (h.includes("kabum")) return "KaBuM!";
-    return h.replace(/^www\./, "");
-  } catch { return "Loja"; }
-};
-const fetchPageFollow = async (url) => {
-  const res = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
-      "upgrade-insecure-requests": "1",
-      "cache-control": "no-cache",
-    },
-  });
-  const html = await res.text().catch(() => "");
-  if (!res.ok) throw new Error(`HTTP ${res.status} ao buscar a página`);
-  if (/Robot Check|captcha|Are you a human\??|To discuss automated access/i.test(html)) {
-    throw new Error("Bloqueio/captcha detectado (robot check).");
-  }
-  return { html, finalUrl: res.url || url };
-};
-
-/* ---------------- Parsers rápidos ---------------- */
-const parseMLFast = (html) => {
-  const og = tryOG(html);
-  const title =
-    og.title ||
-    clean(
-      html.match(/<h1[^>]*class=["'][^"']*ui-pdp-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1]
-        ?.replace(/<[^>]+>/g, "") || ""
-    );
-
-  let price = null, oldPrice = null, installment = "";
-
-  // JSON “prices” (quando SSR entrega)
-  const pricesBlock = html.match(/"prices"\s*:\s*{[\s\S]{0,40000}?}/i)?.[0] || "";
-  if (pricesBlock) {
-    const amounts  = [...pricesBlock.matchAll(/"amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1])).filter(Boolean);
-    const regulars = [...pricesBlock.matchAll(/"regular_amount"\s*:\s*([\d\.,]+)/g)].map(m => toNumber(m[1])).filter(Boolean);
-    if (amounts.length)  price    = amounts.sort((a,b)=>a-b)[0];
-    if (regulars.length) oldPrice = regulars.sort((a,b)=>b-a)[0];
-    if (price != null && oldPrice != null && price >= oldPrice) {
-      const alt = amounts.sort((a,b)=>a-b).find(v => v < oldPrice);
-      if (alt) price = alt;
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gerador WhatsApp de Afiliados</title>
+  <meta name="description" content="Cole o link encurtado de afiliados e gere o texto pronto para WhatsApp.">
+  <style>
+    :root{
+      --bg:#0b1020; --card:#0f172a; --text:#e6eeff; --muted:#9fb0cf;
+      --border:#1e293b; --primary:#6ea8fe; --accent:#22c55e;
     }
-    // installments do bloco
-    const instBlock = pricesBlock + (html.match(/"installments"\s*:\s*{[\s\S]{0,2000}?}/i)?.[0] || "");
-    const q = parseInt(instBlock.match(/"quantity"\s*:\s*(\d{1,2})/i)?.[1] || "", 10);
-    const a = toNumber(instBlock.match(/"amount"\s*:\s*([\d\.,]+)/i)?.[1] || "");
-    const r = toNumber(instBlock.match(/"rate"\s*:\s*([\d\.,]+)/i)?.[1] || "");
-    if (q && a) installment = `${q}x de ${a.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}${(r===0||r===null)?" sem juros":""}`;
-  }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; color:var(--text);
+      font:16px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a2452 0%, #0b1020 48%, #0b1020 100%);
+      display:flex; align-items:flex-start; justify-content:center;
+    }
+    .wrap{width:100%; max-width:1000px; padding:28px 16px 64px}
+    .hero{ text-align:center; margin-bottom:18px; }
+    .title{ font-size:28px; font-weight:800; margin:0 0 10px; letter-spacing:.2px; }
+    .subtitle{color:var(--muted); margin:0}
+    .bar{ margin:18px auto 0; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; max-width:820px; }
+    .input{
+      flex:1; min-width:260px; max-width:620px; background:#0d1226; color:#fff; border:1px solid var(--border);
+      padding:14px 14px; border-radius:14px; outline:none;
+    }
+    .btn{
+      padding:14px 18px; border-radius:14px; border:1px solid #274269;
+      background:linear-gradient(180deg,#3b82f6,#1d4ed8); color:#fff; cursor:pointer;
+      transition:transform .08s ease, opacity .2s;
+    }
+    .btn:hover{transform:translateY(-1px)}
+    .btn.secondary{ background:linear-gradient(180deg,#22c55e,#16a34a); border-color:#138a3f; }
+    .btn.ghost{background:transparent; border:1px dashed var(--border); color:#cbd5e1}
 
-  // Fallbacks leves
-  if (price == null) {
-    price =
-      toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
-      toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
-  }
-  if (oldPrice == null) {
-    oldPrice =
-      toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) ||
-      toNumber(html.match(/"original_price"\s*:\s*("?[\d\.,]+"?)/i)?.[1]) || null;
-  }
-  if (!installment) {
-    installment = clean(
-      html.match(/em\s+até\s+\d{1,2}x[^<]{0,120}R\$\s?[\d\.\,]+(?:\s+sem\s+juros)?/i)?.[0] || ""
-    );
-  }
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid var(--border); border-radius:18px; padding:18px;
+      box-shadow:0 12px 40px rgba(0,0,0,.35);
+    }
+    .editor{ margin-top:18px; display:grid; gap:18px; grid-template-columns: 320px 1fr; align-items:start; }
+    @media (max-width:900px){ .editor{grid-template-columns:1fr} }
+    .media{
+      background:#0d1326; border:1px solid var(--border); border-radius:16px; width:100%; aspect-ratio:1/1;
+      display:flex; align-items:center; justify-content:center; overflow:hidden;
+    }
+    .media img{ max-width:100%; max-height:100%; width:auto; height:auto; object-fit:contain; display:block; }
+    .row{display:flex; gap:10px; flex-wrap:wrap}
+    .field{ flex:1; min-width:220px; background:#0d1226; border:1px solid var(--border); color:#fff; border-radius:12px; padding:12px 12px; outline:none }
+    .wide{width:100%}
+    .hint{color:var(--muted); font-size:13px}
+    .actions{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+    .pill{border:1px solid var(--border); padding:6px 10px; border-radius:999px; font-size:13px; color:#c9d6f2}
+    .preview{white-space:pre-wrap; background:#0b1224; border:1px dashed var(--border); border-radius:12px; padding:12px; margin-top:10px; color:#d9e6ff}
+    .small{font-size:12px; color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1 class="title">Gerador WhatsApp de Afiliados</h1>
+      <p class="subtitle">Cole o <b>link encurtado</b> do seu painel (amzn.to, mercadolivre.com/sec, shopee encurtado…) e gere o texto pronto.</p>
+      <div class="bar">
+        <input id="url" class="input" placeholder="Cole aqui o link encurtado…" />
+        <button id="parse" class="btn">Extrair dados</button>
+      </div>
+      <p class="hint" style="margin-top:10px">Usamos o link encurtado <b>do jeito que está</b> para compartilhar (preserva seu tracking). A expansão serve só para coletar título/preço/imagem.</p>
+    </div>
 
-  // Imagem
-  const image =
-    og.image ||
-    html.match(/"secure_url"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\u002F/g, "/") ||
-    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] || "";
+    <div class="card editor">
+      <div class="media"><img id="img" alt="Imagem do produto"></div>
 
-  return { title, price, oldPrice, installment, image, parseHint: "ml_fast" };
-};
+      <div>
+        <div class="row">
+          <input id="store" class="field" placeholder="Loja (ex.: Amazon)" style="max-width:250px" />
+          <input id="emoji" class="field" placeholder="Emoji (ex.: 🔥)" style="max-width:140px" />
+          <input id="badge" class="field" placeholder="Selo (ex.: Amazon)" style="max-width:250px" />
+        </div>
 
-const parseAmazon = (html) => {
-  const title =
-    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
-    clean(html.match(/<span[^>]+id=["']productTitle["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+        <input id="title" class="field wide" placeholder="Título do produto" />
 
-  const priceBlock =
-    html.match(/id=["']corePriceDisplay_[^"']+["'][\s\S]{0,4000}?<\/div>/i)?.[0] ||
-    html.match(/id=["']apex_desktop["'][\s\S]{0,4000}?<\/div>/i)?.[0] || "";
+        <div class="row">
+          <input id="oldPrice" class="field" placeholder="Preço antigo (ex.: 569,00)" style="max-width:260px" />
+          <input id="price" class="field" placeholder="Preço atual (ex.: 549,00)" style="max-width:260px" />
+          <input id="installment" class="field" placeholder="Parcelas (ex.: 6x R$ 43,71 sem juros)" />
+        </div>
 
-  let price = null, oldPrice = null;
+        <input id="image" class="field wide" placeholder="URL da imagem" />
 
-  if (priceBlock) {
-    const w = priceBlock.match(/class=["']a-price-whole["'][^>]*>([\d\.\,]+)/i)?.[1];
-    const f = priceBlock.match(/class=["']a-price-fraction["'][^>]*>(\d{1,2})/i)?.[1];
-    price = (w && f) ? toNumber(`${w},${f}`) : toNumber(priceBlock.match(/a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1]);
-    const oldInBlock =
-      priceBlock.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-      priceBlock.match(/id=["']priceblock_strikeprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] || null;
-    oldPrice = toNumber(oldInBlock);
-  }
-  if (price == null) {
-    const t =
-      html.match(/id=["']priceblock_dealprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-      html.match(/id=["']priceblock_ourprice["'][^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-      html.match(/<span[^>]+class=["'][^"']*a-offscreen[^"']*["'][^>]*>(R\$\s?[\d\.\,]+)<\/span>/i)?.[1] ||
-      html.match(/"priceAmount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-      html.match(/"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-      html.match(/"price"\s*:\s*"([\d\.\,]+)"/i)?.[1] || null;
-    price = toNumber(t);
-  }
-  if (oldPrice == null) {
-    const t =
-      html.match(/class=["'][^"']*a-text-price[^"']*["'][\s\S]*?a-offscreen[^>]*>(R\$\s?[\d\.\,]+)</i)?.[1] ||
-      html.match(/(?:De:|Preço\s+de\s+tabela)[^<]*?(R\$\s?[\d\.\,]+)/i)?.[1] ||
-      html.match(/"wasPrice".*?"amount"\s*:\s*"([\d\.\,]+)"/i)?.[1] ||
-      html.match(/"strikePrice"\s*:\s*"([\d\.\,]+)"/i)?.[1] || null;
-    oldPrice = toNumber(t);
-  }
+        <div class="row">
+          <input id="shareUrl" class="field" placeholder="Link para compartilhar (encurtado do seu painel)" />
+          <input id="finalUrl" class="field" placeholder="URL expandida (referência)" />
+        </div>
 
-  const allInst = Array.from(
-    html.matchAll(/(?:em\s+até\s+)?(\d{1,2})x[^<]{0,80}R\$\s?([\d\.\,]+)(?:\s+sem\s+juros)?/ig)
-  ).map(m => ({ n: parseInt(m[1], 10), val: m[2] }));
-  let installment = "";
-  if (allInst.length) {
-    const best = allInst.sort((a,b)=> b.n - a.n)[0];
-    installment = `${best.n}x de R$ ${best.val}${/sem\s+juros/i.test(html) ? " sem juros" : ""}`;
-  }
+        <div class="actions">
+          <button id="gen" class="btn secondary">Gerar texto e abrir WhatsApp</button>
+          <button id="copy" class="btn ghost">Copiar texto</button>
+          <button id="previewBtn" class="btn ghost">Prévia</button>
+          <span id="hint" class="pill">pronto</span>
+        </div>
 
-  let image =
-    html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
-    html.match(/data-old-hires=["']([^"']+)["']/i)?.[1] || "";
-  if (!image) {
-    const dyn = html.match(/data-a-dynamic-image=['"]({[^'"]+})['"]/i)?.[1];
-    if (dyn) { try { const j = JSON.parse(dyn.replace(/&quot;/g,'"')); const first = Object.keys(j)[0]; if (first) image = first; } catch {} }
-  }
-  if (!image) image = html.match(/id=["']landingImage["'][^>]+src=["']([^"']+)["']/i)?.[1] || "";
+        <div class="preview small" id="preview" style="display:none"></div>
+      </div>
+    </div>
+  </div>
 
-  return { title, price, oldPrice, installment, image, parseHint: "amazon_html_v3" };
-};
+  <script>
+    // ===== helpers =====
+    const el = (id) => document.getElementById(id);
+    const set = (id, v) => { el(id).value = v ?? ""; };
 
-const parseShopee = (html) => {
-  const og = tryOG(html);
-  const title = og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
-  const price =
-    toNumber(html.match(/"price"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) ||
-    toNumber(html.match(/"price_min"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) || null;
-  const oldPrice =
-    toNumber(html.match(/"price_before_discount"\s*:\s*("?[\d\.\,]+"?)/i)?.[1]?.replace(/"/g, "")) || null;
-  const image = og.image || "";
-  const installment = "";
-  return { title, price, oldPrice, installment, image, parseHint: "shopee_html" };
-};
-
-const parseGeneric = (html) => {
-  const og = tryOG(html);
-  const title = og.title || clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "");
-  const price =
-    toNumber(html.match(/itemprop=["']price["'][^>]*content=["']([^"']+)["']/i)?.[1]) ||
-    toNumber(html.match(/"price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) || null;
-  const oldPrice = toNumber(html.match(/"list_price"\s*:\s*("?[\d\.,]+"?)/)?.[1]) || null;
-  const image = og.image || "";
-  const installment = "";
-  return { title, price, oldPrice, installment, image, parseHint: "generic_og" };
-};
-
-/* ---------------- Fallback headless (carregado dinamicamente) ---------------- */
-async function renderMLFallback(url) {
-  let browser;
-  try {
-    // imports DINÂMICOS evitam crash no cold start quando não for usar headless
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const puppeteer = (await import("puppeteer-core")).default;
-
-    browser = await puppeteer.launch({
-      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
-      executablePath: await chromium.executablePath(),
-      headless: true,
-      defaultViewport: { width: 1200, height: 900, deviceScaleFactor: 1 }
-    });
-
-    const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({ "Accept-Language": "pt-BR,pt;q=0.9" });
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
-    );
-    try { await page.emulateTimezone("America/Fortaleza"); } catch {}
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(1200);
-
-    const result = await page.evaluate(() => {
-      const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
-      const title =
-        document.querySelector("h1.ui-pdp-title")?.textContent ||
-        document.querySelector('meta[property="og:title"]')?.content ||
-        document.title;
-
-      const frac  = document.querySelector(".ui-pdp-price__second-line .andes-money-amount__fraction");
-      const cents = document.querySelector(".ui-pdp-price__second-line .andes-money-amount__cents");
-      const priceStr = frac ? `${frac.textContent},${(cents && cents.textContent) || "00"}` : "";
-
-      const prev = document.querySelector(".andes-money-amount--previous");
-      let oldStr = "";
-      if (prev) {
-        const wf = prev.querySelector(".andes-money-amount__fraction");
-        const wc = prev.querySelector(".andes-money-amount__cents");
-        if (wf) oldStr = `${wf.textContent},${(wc && wc.textContent) || "00"}`;
+    // "1.999,27" -> R$ 1.999,27 (robusto)
+    const currency = (v) => {
+      if (v === null || v === undefined || v === "") return "";
+      if (typeof v === "number" && Number.isFinite(v)) {
+        return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
       }
-
-      let instTxt = "";
-      const m = document.body.innerText.match(/(\d{1,2})x\s+de\s+R\$\s*[\d\.\,]+(?:\s+sem\s+juros)?/i);
-      if (m) instTxt = m[0];
-
-      const image =
-        document.querySelector('meta[property="og:image"]')?.content ||
-        document.querySelector('img.ui-pdp-image')?.src ||
-        document.querySelector('figure img')?.src || "";
-
-      return { title: clean(title), priceStr: clean(priceStr), oldStr: clean(oldStr), instTxt: clean(instTxt), image };
-    });
-
-    return {
-      title: result.title,
-      price: toNumber(result.priceStr),
-      oldPrice: toNumber(result.oldStr),
-      installment: result.instTxt,
-      image: result.image,
-      parseHint: "ml_headless"
+      const s = String(v)
+        .replace(/\.(?=\d{3}(\D|$))/g, "")     // remove milhar
+        .replace(/[^\d,.-]/g, "")
+        .replace(",", ".");
+      const n = parseFloat(s);
+      return Number.isFinite(n)
+        ? n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+        : String(v);
     };
-  } finally {
-    try { await browser?.close(); } catch {}
-  }
-}
 
-/* ---------------- Handler ---------------- */
-export default async function handler(req, res) {
-  const safeReply = (obj) => {
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json; charset=utf-8");
-    res.setHeader("cache-control", "public, max-age=10, s-maxage=60");
-    res.end(JSON.stringify(obj));
-  };
+    // "11x R$ 199,73 sem juros" -> "💳 11X R$199,73"
+    const normalizeInstallment = (s) => {
+      if (!s) return "";
+      const q = (s.match(/(\d{1,2})\s*x/i) || [])[1];
+      let amt = (s.match(/(\d{1,3}(?:\.\d{3})*,\d{2})/) || [])[1];
+      if (!q || !amt) return "";
+      return `💳 ${q.toUpperCase()}X R$${amt.replace(/^R\$\s*/i, "")}`;
+    };
 
-  try {
-    const urlObj = new URL(req.url, "http://localhost");
-    const shortUrl = urlObj.searchParams.get("url");
-    if (!shortUrl) return safeReply({ error: "Informe ?url=<link_encurtado_de_afiliado>" });
+    // texto final no formato de alta conversão
+    const buildText = () => {
+      const store = el("store").value || "Mercado Livre";
+      const emoji = el("emoji").value || "🔥";
+      const title = el("title").value || "";
+      const oldPrice = el("oldPrice").value || "";
+      const price = el("price").value || "";
+      const installment = normalizeInstallment(el("installment").value || "");
+      const share = el("shareUrl").value || el("url").value || "";
 
-    // 1) expandir
-    let { html, finalUrl } = await fetchPageFollow(shortUrl);
-    let host = new URL(finalUrl).hostname.toLowerCase();
+      const lines = [];
+      lines.push(store);                      // 1
+      lines.push(`${emoji} ${title}`);        // 2
+      lines.push("");                         // 3
+      if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`); // 4
+      if (price)    lines.push(`✅ ${currency(price)}`);    // 5
+      if (installment) lines.push(installment);            // 6
+      lines.push("");                         // 7
+      if (share) lines.push(share);           // 8
+      return lines.join("\n");
+    };
 
-    // canonical (landing /social do ML)
-    const canonical = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)?.[1] || "";
-    const isMLSocal = host.includes("mercadolivre") && /\/social\//i.test(finalUrl);
-    if ((isMLSocal || canonical) && canonical) {
-      try {
-        const again = await fetchPageFollow(canonical);
-        html = again.html; finalUrl = again.finalUrl; host = new URL(finalUrl).hostname.toLowerCase();
-      } catch {}
-    }
+    const showPreview = () => {
+      el("preview").textContent = buildText();
+      el("preview").style.display = "block";
+    };
+    const setHint = (msg) => { el("hint").textContent = msg; };
 
-    // 2) parser rápido
-    let data;
-    if (host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) {
-      data = parseMLFast(html);
-    } else if (host.includes("amazon")) {
-      data = parseAmazon(html);
-    } else if (host.includes("shopee")) {
-      data = parseShopee(html);
-    } else {
-      data = parseGeneric(html);
-    }
+    // ===== eventos =====
+    el("previewBtn").onclick = showPreview;
 
-    // 3) fallback headless SÓ para ML e SÓ se faltou tudo
-    if ((host.includes("mercadolivre") || host.includes("mercadolibre") || host.includes("mlstatic")) &&
-        (data.price == null && data.oldPrice == null && !data.installment)) {
-      try {
-        const deep = await renderMLFallback(finalUrl);
-        data = { ...data, ...Object.fromEntries(Object.entries(deep).filter(([_,v]) => v)) };
-      } catch (e) {
-        // se o headless falhar, seguimos com o que houver (evita 500 do Vercel)
+    el("copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(buildText()); setHint("copiado"); }
+      catch { setHint("falha ao copiar"); }
+      showPreview();
+    };
+
+    el("gen").onclick = () => {
+      const txt = buildText();
+      navigator.clipboard?.writeText(txt).catch(()=>{});
+      window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`,"_blank","noopener");
+    };
+
+    el("parse").onclick = async () => {
+      const url = el("url").value.trim();
+      if (!url) { alert("Cole o link encurtado do seu painel."); return; }
+      setHint("buscando...");
+      try{
+        const res = await fetch(`/api/parse?url=${encodeURIComponent(url)}`);
+        const data = await res.json();
+
+        set("store", data.store || "");
+        set("badge", data.store || "");
+        set("emoji", "🔥");
+        set("title", data.title || "");
+        set("oldPrice", (typeof data.oldPrice === "number" ? data.oldPrice : (data.oldPrice ?? "")));
+        set("price",    (typeof data.price    === "number" ? data.price    : (data.price    ?? "")));
+        set("installment", data.installment || "");
+        set("image", data.image || "");
+        set("shareUrl", data.shareUrl || url);
+        set("finalUrl", data.finalUrl || "");
+
+        if (data.image) el("img").src = data.image; else el("img").removeAttribute("src");
+        setHint(data.parseHint ? `ok (${data.parseHint})` : "ok");
+        showPreview();
+      }catch(e){
+        setHint("erro");
+        alert("Não consegui extrair automaticamente. Você pode preencher os campos manualmente.\n\n" + (e.message || e));
       }
-    }
-
-    // 4) payload
-    const asNum = (x) => (typeof x === "number" ? x : toNumber(x));
-    return safeReply({
-      store: guessStore(finalUrl),
-      title: clean(data?.title || ""),
-      price: asNum(data?.price),
-      oldPrice: asNum(data?.oldPrice),
-      installment: clean(data?.installment || ""),
-      image: data?.image || "",
-      shareUrl: shortUrl,
-      finalUrl,
-      parseHint: data?.parseHint || "n/a"
-    });
-  } catch (e) {
-    // Nunca devolve HTML; sempre JSON (evita “Unexpected token A” no front).
-    return safeReply({
-      store: "Loja",
-      title: "",
-      price: null,
-      oldPrice: null,
-      installment: "",
-      image: "",
-      shareUrl: new URL(req.url, "http://localhost").searchParams.get("url") || "",
-      finalUrl: "",
-      parseHint: "error",
-      note: String(e?.message || e)
-    });
-  }
-}
+    };
+  </script>
+</body>
+</html>
