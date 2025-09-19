@@ -149,21 +149,25 @@
       if (isNaN(n)) return String(v);
       return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
     };
+     // texto final no formato de alta conversão
     const buildText = () => {
+      const store = el("store").value || "Mercado Livre";
       const emoji = el("emoji").value || "🔥";
       const title = el("title").value || "";
       const oldPrice = el("oldPrice").value || "";
       const price = el("price").value || "";
-      const installment = el("installment").value || "";
+      const installment = normalizeInstallment(el("installment").value || "");
       const share = el("shareUrl").value || el("url").value || "";
 
       const lines = [];
-      lines.push(`${emoji} ${title}`);
-      if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`);
-      if (price)    lines.push(`✅ ${currency(price)}`);
-      if (installment) lines.push(installment);
-      lines.push("");
-      if (share) lines.push(share);
+      lines.push(store);                      // 1
+      lines.push(`${emoji} ${title}`);        // 2
+      lines.push("");                         // 3
+      if (oldPrice) lines.push(`❌ ${currency(oldPrice)}`); // 4
+      if (price)    lines.push(`✅ ${currency(price)}`);    // 5
+      if (installment) lines.push(installment);            // 6
+      lines.push("");                         // 7
+      if (share) lines.push(share);           // 8
       return lines.join("\n");
     };
     const showPreview = () => {
